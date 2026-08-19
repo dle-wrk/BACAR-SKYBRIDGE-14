@@ -61,6 +61,19 @@ function writeRoom(nextRoom) {
   );
 }
 
+function appendMessage(room, message) {
+  if (!message || typeof message.text !== 'string' || !message.id) {
+    return { room, added: false };
+  }
+  if (room.messages.some((existing) => existing.id === message.id)) {
+    return { room, added: false };
+  }
+  return {
+    room: { ...room, messages: [...room.messages, message].slice(-MAX_MESSAGES) },
+    added: true,
+  };
+}
+
 function emitRoomEvent(type, payload) {
   if (typeof window === 'undefined') return;
 
@@ -154,10 +167,10 @@ export default function ChatRoom({ observer }) {
 
           if (topic === MQTT_CHAT_TOPIC && message?.type === 'chat-message') {
             const room = readRoom();
-            const nextMessages = [...room.messages, message.message].slice(-MAX_MESSAGES);
-            const nextRoom = { ...room, messages: nextMessages };
-            writeRoom(nextRoom);
-            setMessages(nextMessages);
+            const result = appendMessage(room, message.message);
+            if (!result.added) return;
+            writeRoom(result.room);
+            setMessages(result.room.messages);
             emitRoomEvent('chat-message', { message: message.message });
           }
         } catch {
@@ -222,10 +235,10 @@ export default function ChatRoom({ observer }) {
     };
 
     const room = readRoom();
-    const nextMessages = [...room.messages, nextMessage].slice(-MAX_MESSAGES);
-    const nextRoom = { ...room, messages: nextMessages };
-    writeRoom(nextRoom);
-    setMessages(nextMessages);
+    const result = appendMessage(room, nextMessage);
+    if (!result.added) return;
+    writeRoom(result.room);
+    setMessages(result.room.messages);
     setDraft('');
     emitRoomEvent('chat-message', { message: nextMessage });
 
