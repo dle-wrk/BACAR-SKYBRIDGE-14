@@ -89,7 +89,7 @@ export default function MissionControl({ observer, onSignOut }) {
               ? <PicoBalloonTelemetry />
               : <RotatorTelemetry />}
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-stretch w-full">
+        <section className="w-full">
           <div className="min-w-0 w-full">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-heading font-semibold text-lg">Payload CUBEs</h2>
@@ -101,15 +101,10 @@ export default function MissionControl({ observer, onSignOut }) {
               ))}
             </div>
           </div>
-
-          <div className="w-full xl:flex xl:justify-end">
-            <div className="w-full xl:h-[calc(100vh-12rem)] xl:max-h-[calc(100vh-12rem)]">
-              <ChatRoom observer={observer} />
-            </div>
-          </div>
         </section>
       </main>
 
+      <ChatRoom observer={observer} />
       <ConnectionSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
