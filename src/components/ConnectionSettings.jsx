@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Wifi, Loader2, Check, Radio } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
+import { MQTT_TOPICS } from '@/lib/mqttService';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -37,7 +38,8 @@ export default function ConnectionSettings({ open, onClose }) {
         </div>
 
         <p className="text-sm text-muted-foreground mb-4">
-          Connect to the locally-hosted BACAR MQTT broker over WebSocket. Enter the broker URL (must use{' '}
+          Connect to the EMQX MQTT broker over WebSocket. The supplied <code className="font-mono text-xs text-accent">broker.emqx.io:1883</code>{' '}
+          address is exposed to browsers through its WebSocket endpoint. Enter a broker URL (must use{' '}
           <code className="font-mono text-xs text-accent">ws://</code> or{' '}
           <code className="font-mono text-xs text-accent">wss://</code>).
         </p>
@@ -48,12 +50,12 @@ export default function ConnectionSettings({ open, onClose }) {
             id="broker"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="ws://192.168.1.50:9001"
+            placeholder="ws://broker.emqx.io:8083/mqtt"
             className="font-mono"
           />
           <p className="text-xs text-muted-foreground">
-            Topics are <code className="font-mono">bacar/skybridge14/&lt;cube&gt;/telemetry</code> and{' '}
-            <code className="font-mono">/image</code>.
+            Telemetry topics: <code className="font-mono">{Object.values(MQTT_TOPICS).filter((topic) => topic.endsWith('/telemetry')).join(', ')}</code>
+            <br />Chat: <code className="font-mono">{MQTT_TOPICS.chat}</code> · Attendees: <code className="font-mono">{MQTT_TOPICS.attendees}</code>
           </p>
         </div>
 

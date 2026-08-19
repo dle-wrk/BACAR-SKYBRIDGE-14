@@ -4,11 +4,24 @@
 
 import mqtt from 'mqtt';
 
+export const MQTT_TOPICS = {
+  luminaTelemetry: 'lumina/telemetry',
+  aerolinkTelemetry: 'aerolink/telemetry',
+  holocubeTelemetry: 'holocube/telemetry',
+  aprsTelemetry: 'aprs/telemetry',
+  sondehubTelemetry: 'sondehub/telemetry',
+  picoTelemetry: 'pico/telemetry',
+  rotatorTelemetry: 'rotator/telemetry',
+  chat: 'lumina/chat',
+  attendees: 'lumina/attendees',
+};
+
 const CUBE_CONFIGS = [
   {
     id: 'BACAR-14A',
     name: 'Project LuminoStratos',
     baseTopic: 'bacar/skybridge14/cubeA',
+    telemetryTopic: MQTT_TOPICS.luminaTelemetry,
     mode: 'full_telemetry',
     cameraConfig: {
       count: 2,
@@ -30,6 +43,7 @@ const CUBE_CONFIGS = [
     id: 'BACAR-14B',
     name: 'Project AreoLink',
     baseTopic: 'bacar/skybridge14/cubeB',
+    telemetryTopic: MQTT_TOPICS.aerolinkTelemetry,
     mode: 'radio_battery_only',
     profile: {
       startAlt: 1637,
@@ -46,6 +60,7 @@ const CUBE_CONFIGS = [
     id: 'BACAR-14C',
     name: 'Project HoloCube',
     baseTopic: 'bacar/skybridge14/cubeC',
+    telemetryTopic: MQTT_TOPICS.holocubeTelemetry,
     mode: 'nrf_image_only',
     profile: {
       startAlt: 1637,
@@ -61,8 +76,72 @@ const CUBE_CONFIGS = [
 ];
 
 const BROKER_KEY = 'bacar_broker_url_v1';
+const DEFAULT_BROKER_URL = 'ws://broker.emqx.io:8083/mqtt';
 const HISTORY_MAX = 180; // ~15 min at 5s cadence
 const BACAR_14C_NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
+
+function findTelemetryValue(source, aliases) {
+  if (!source || typeof source !== 'object') return undefined;
+  const entries = Object.entries(source);
+  const normalized = new Map(entries.map(([key, value]) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), value]));
+  return aliases
+    .map((alias) => normalized.get(alias.toLowerCase().replace(/[^a-z0-9]/g, '')))
+    .find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function asNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function normalizeTelemetryPayload(payload) {
+  const source = payload?.telemetry || payload?.data || payload?.payload || payload;
+  if (!source || typeof source !== 'object') return null;
+
+  const read = (aliases) => findTelemetryValue(source, aliases);
+  const nestedGps = source.gps && typeof source.gps === 'object' ? source.gps : {};
+  const telemetry = { ...source };
+  const setNumber = (key, aliases) => {
+    const value = asNumber(read(aliases));
+    if (value !== undefined) telemetry[key] = value;
+  };
+
+  setNumber('altitude_m', ['altitude_m', 'altitude', 'altitude_meters', 'altitudeMeters']);
+  setNumber('temperature_c', ['temperature_c', 'temperature', 'temp_c', 'temp']);
+  setNumber('pressure_hpa', ['pressure_hpa', 'pressure', 'air_pressure_hpa', 'barometric_pressure']);
+  setNumber('battery_v', ['battery_v', 'battery_voltage', 'battery_voltage_v', 'voltage', 'batteryVoltage']);
+  setNumber('battery_current_ma', ['battery_current_ma', 'current_ma', 'current_draw_ma', 'current_draw', 'currentDraw']);
+  setNumber('latitude', ['latitude', 'lat', 'gps_lat', 'gps_latitude', 'gpsLat']);
+  setNumber('longitude', ['longitude', 'lon', 'lng', 'gps_lon', 'gps_longitude', 'gpsLon']);
+  setNumber('vertical_speed_ms', ['vertical_speed_ms', 'vertical_speed', 'climb_rate', 'climbRate']);
+  setNumber('speed_ms', ['speed_ms', 'speed', 'ground_speed', 'groundSpeed']);
+  setNumber('heading_deg', ['heading_deg', 'heading', 'course', 'bearing']);
+  setNumber('vhf_frequency', ['vhf_frequency', 'vhf_freq', 'vhfFrequency']);
+  setNumber('uhf_frequency', ['uhf_frequency', 'uhf_freq', 'uhfFrequency']);
+  setNumber('vhf_power', ['vhf_power', 'vhf_tx_power', 'vhfPower']);
+  setNumber('uhf_power', ['uhf_power', 'uhf_tx_power', 'uhfPower']);
+  setNumber('aprs_speed', ['aprs_speed', 'speed', 'speed_kmh', 'speed_knots']);
+  setNumber('aprs_course', ['aprs_course', 'course', 'heading', 'bearing']);
+  setNumber('frequency', ['frequency', 'freq', 'radio_frequency', 'radioFrequency']);
+  setNumber('horizontal_angle', ['horizontal_angle', 'azimuth', 'azimuth_deg', 'pan', 'pan_deg']);
+  setNumber('vertical_angle', ['vertical_angle', 'elevation', 'elevation_deg', 'tilt', 'tilt_deg']);
+
+  if (telemetry.latitude === undefined) telemetry.latitude = asNumber(findTelemetryValue(nestedGps, ['lat', 'latitude']));
+  if (telemetry.longitude === undefined) telemetry.longitude = asNumber(findTelemetryValue(nestedGps, ['lon', 'lng', 'longitude']));
+  telemetry.callsign = read(['callsign', 'call_sign', 'station', 'station_id']);
+  telemetry.uploader = read(['uploader', 'uploaded_by', 'receiver', 'uploader_callsign']);
+  telemetry.symbol = read(['symbol', 'symbol_code', 'symbol_table']);
+  telemetry.comment = read(['comment', 'message', 'status_text']);
+  telemetry.tracking_mode = read(['tracking_mode', 'tracking', 'track_mode', 'mode']);
+  telemetry.status = read(['status', 'state', 'mission_status', 'flight_status']);
+  telemetry.errors = read(['errors', 'error', 'faults', 'warnings']);
+  telemetry.t = asNumber(read(['t', 'time', 'timestamp', 'timestamp_ms'])) || Date.now();
+  return telemetry;
+}
 
 class TelemetryService {
   constructor() {
@@ -75,6 +154,10 @@ class TelemetryService {
       history: [],
       images: [],
     }));
+    this.aprsTelemetry = null;
+    this.sondehubTelemetry = null;
+    this.picoTelemetry = null;
+    this.rotatorTelemetry = null;
     this.listeners = new Set();
     this.alertListeners = new Set();
     this.alerts = [];
@@ -83,7 +166,8 @@ class TelemetryService {
     this.simTimer = null;
     this.simStartedAt = 0;
     this.mode = 'idle';
-    this.brokerUrl = localStorage.getItem(BROKER_KEY) || '';
+    const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
+    this.brokerUrl = savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl;
   }
 
   getAlerts() { return this.alerts; }
@@ -161,6 +245,14 @@ class TelemetryService {
   }
 
   getCubes() { return this.cubes; }
+
+  getAprsTelemetry() { return this.aprsTelemetry; }
+
+  getSondehubTelemetry() { return this.sondehubTelemetry; }
+
+  getPicoTelemetry() { return this.picoTelemetry; }
+
+  getRotatorTelemetry() { return this.rotatorTelemetry; }
 
   subscribe(listener) {
     this.listeners.add(listener);
@@ -241,9 +333,15 @@ class TelemetryService {
     this.client.on('connect', () => {
       const topics = [];
       this.cubes.forEach((c) => {
-        topics.push(`${c.baseTopic}/telemetry`);
+        topics.push(c.telemetryTopic);
         topics.push(`${c.baseTopic}/image`);
       });
+      topics.push(
+        MQTT_TOPICS.aprsTelemetry,
+        MQTT_TOPICS.sondehubTelemetry,
+        MQTT_TOPICS.picoTelemetry,
+        MQTT_TOPICS.rotatorTelemetry
+      );
       this.client.subscribe(topics, (err) => {
         if (err) {
           this.mode = 'idle';
@@ -251,9 +349,37 @@ class TelemetryService {
       });
     });
     this.client.on('message', (topic, payload) => {
-      const cube = this.cubes.find((c) => topic.startsWith(c.baseTopic));
+      if (topic === MQTT_TOPICS.aprsTelemetry) {
+        try {
+          this.aprsTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this._emit();
+        } catch { /* ignore malformed APRS payloads */ }
+        return;
+      }
+      if (topic === MQTT_TOPICS.sondehubTelemetry) {
+        try {
+          this.sondehubTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this._emit();
+        } catch { /* ignore malformed SondeHub payloads */ }
+        return;
+      }
+      if (topic === MQTT_TOPICS.picoTelemetry) {
+        try {
+          this.picoTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this._emit();
+        } catch { /* ignore malformed Pico Balloon payloads */ }
+        return;
+      }
+      if (topic === MQTT_TOPICS.rotatorTelemetry) {
+        try {
+          this.rotatorTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this._emit();
+        } catch { /* ignore malformed rotator payloads */ }
+        return;
+      }
+      const cube = this.cubes.find((c) => topic === c.telemetryTopic || topic.startsWith(c.baseTopic));
       if (!cube) return;
-      const kind = topic.endsWith('/image') ? 'image' : 'telemetry';
+      const kind = topic.startsWith(cube.baseTopic) && topic.endsWith('/image') ? 'image' : 'telemetry';
       if (kind === 'image') {
         const parsedUrl = this._parseNrfImagePayload(cube.id, payload);
         if (parsedUrl) {
@@ -261,7 +387,8 @@ class TelemetryService {
         }
       } else {
         try {
-          const data = JSON.parse(payload.toString());
+          const data = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          if (!data) return;
           if (data.cube_id) data.id = data.cube_id;
           this._applyTelemetry(cube.id, data);
         } catch { /* ignore malformed */ }

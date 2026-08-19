@@ -5,6 +5,10 @@ import TopBar from '@/components/TopBar';
 import StarfieldBackground from '@/components/StarfieldBackground';
 import ConnectionSettings from '@/components/ConnectionSettings';
 import BurstAlerts from '@/components/BurstAlerts';
+import AprsTelemetry from '@/components/AprsTelemetry';
+import SondehubTelemetry from '@/components/SondehubTelemetry';
+import PicoBalloonTelemetry from '@/components/PicoBalloonTelemetry';
+import RotatorTelemetry from '@/components/RotatorTelemetry';
 import { clearObserver } from '@/lib/observer';
 import ChatRoom from '@/components/ChatRoom';
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +17,7 @@ import { Rocket, Satellite } from 'lucide-react';
 export default function MissionControl({ observer, onSignOut }) {
   const [cubes, setCubes] = useState(telemetry.getCubes());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeFeed, setActiveFeed] = useState('aprs');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -29,7 +34,13 @@ export default function MissionControl({ observer, onSignOut }) {
   return (
     <div className="min-h-screen">
       <StarfieldBackground />
-      <TopBar observer={observer} onSignOut={signOut} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar
+        observer={observer}
+        onSignOut={signOut}
+        onOpenSettings={() => setSettingsOpen(true)}
+        activeFeed={activeFeed}
+        onFeedChange={setActiveFeed}
+      />
 
       <main className="w-full px-3 sm:px-4 lg:px-5 py-6 sm:py-8">
         <section className="mb-6">
@@ -69,6 +80,14 @@ export default function MissionControl({ observer, onSignOut }) {
             </div>
           ))}
         </section>
+
+        {activeFeed === 'aprs'
+          ? <AprsTelemetry />
+          : activeFeed === 'sondehub'
+            ? <SondehubTelemetry />
+            : activeFeed === 'pico'
+              ? <PicoBalloonTelemetry />
+              : <RotatorTelemetry />}
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-stretch w-full">
           <div className="min-w-0 w-full">

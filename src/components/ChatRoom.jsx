@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import mqtt from 'mqtt';
 import { MessageSquareText, SendHorizonal, Users } from 'lucide-react';
 import { observerDisplayName } from '@/lib/observer';
-import { telemetry } from '@/lib/mqttService';
+import { MQTT_TOPICS, telemetry } from '@/lib/mqttService';
 
 const ROOM_KEY = 'bacar_mission_chat_room_v1';
 const CHANNEL_NAME = 'bacar_chat_channel_v1';
-const MQTT_CHAT_TOPIC = 'bacar/skybridge14/mission-chat';
-const MQTT_PRESENCE_TOPIC = 'bacar/skybridge14/mission-presence';
+const MQTT_CHAT_TOPIC = MQTT_TOPICS.chat;
+const MQTT_PRESENCE_TOPIC = MQTT_TOPICS.attendees;
 const PRESENCE_TTL_MS = 60_000;
 const MAX_MESSAGES = 80;
 

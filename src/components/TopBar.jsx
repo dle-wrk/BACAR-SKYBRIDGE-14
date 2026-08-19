@@ -3,7 +3,7 @@ import { telemetry } from '@/lib/mqttService';
 import { observerDisplayName } from '@/lib/observer';
 import { Radio, Settings, LogOut, Wifi, Activity } from 'lucide-react';
 
-export default function TopBar({ observer, onSignOut, onOpenSettings }) {
+export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed, onFeedChange }) {
   const [mode, setMode] = useState(telemetry.isSim() ? 'sim' : telemetry.isLive() ? 'live' : 'idle');
   const [cubeCount, setCubeCount] = useState(0);
   const [active, setActive] = useState(0);
@@ -80,6 +80,29 @@ export default function TopBar({ observer, onSignOut, onOpenSettings }) {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
+      </div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-1 border-t border-border/40" role="tablist" aria-label="Telemetry feeds">
+        {[
+          { id: 'aprs', label: 'APRS' },
+          { id: 'sondehub', label: 'SondeHub' },
+          { id: 'pico', label: 'Pico Balloon' },
+          { id: 'rotator', label: 'Rotator' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeFeed === tab.id}
+            onClick={() => onFeedChange(tab.id)}
+            className={`border-b-2 px-3 py-2 text-xs font-mono uppercase tracking-wider transition ${
+              activeFeed === tab.id
+                ? 'border-accent text-accent'
+                : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
     </header>
   );

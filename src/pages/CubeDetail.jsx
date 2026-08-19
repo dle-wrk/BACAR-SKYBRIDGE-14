@@ -52,12 +52,18 @@ export default function CubeDetail({ observer, onSignOut }) {
     : 0;
 
   const rows = t && !isNrfOnly ? [
+    { icon: Clock, label: 'Time', value: t.t ? new Date(t.t).toLocaleString() : '--' },
     { icon: Mountain, label: 'Altitude', value: `${t.altitude_m ?? '--'} m`, sub: `${((t.altitude_m ?? 0)/1000).toFixed(2)} km` },
+    { icon: Gauge, label: 'Speed', value: `${t.speed_ms ?? '--'} m/s` },
+    { icon: Gauge, label: 'Heading', value: `${t.heading_deg ?? '--'}°` },
     { icon: ArrowLeft, label: 'Vertical Speed', value: `${t.vertical_speed_ms >= 0 ? '+' : ''}${t.vertical_speed_ms ?? 0} m/s` },
     { icon: Thermometer, label: 'Temperature', value: `${t.temperature_c ?? '--'} °C` },
     { icon: Gauge, label: 'Pressure', value: `${t.air_pressure_hpa ?? t.pressure_hpa ?? '--'} hPa` },
     { icon: Thermometer, label: 'Humidity', value: `${t.humidity_pct ?? '--'} %` },
     { icon: Battery, label: 'Battery', value: `${t.battery_v ?? '--'} V / ${t.battery_current_ma ?? '--'} mA` },
+    { icon: RadioIcon, label: 'Current Draw', value: `${t.battery_current_ma ?? '--'} mA` },
+    { icon: RadioIcon, label: 'Status', value: `${t.status ?? '--'}` },
+    { icon: RadioIcon, label: 'Errors', value: `${Array.isArray(t.errors) ? t.errors.join(', ') : t.errors ?? '--'}` },
     { icon: RadioIcon, label: 'nRF RSSI', value: `${t.nrf_rssi_dbm ?? '--'} dBm` },
     { icon: Satellite, label: 'GSM', value: `${t.gsm_signal_dbm ?? '--'} dBm` },
     { icon: MapPin, label: 'GPS', value: `${t.gps_fix ?? '3D fix'} · ${t.latitude ?? '--'}, ${t.longitude ?? '--'}`, mono: true },
@@ -68,10 +74,18 @@ export default function CubeDetail({ observer, onSignOut }) {
     { icon: MapPin, label: 'Position', value: `${t.latitude ?? '--'}, ${t.longitude ?? '--'}`, mono: true },
     { icon: RadioIcon, label: 'Cameras', value: `${t.cameras?.total_cameras ?? 0} cams · ${t.cameras?.image_count ?? 0} img / ${t.cameras?.video_count ?? 0} vid` },
   ] : isRadioOnly && t ? [
+    { icon: Clock, label: 'Time', value: t.t ? new Date(t.t).toLocaleString() : '--' },
+    { icon: RadioIcon, label: 'VHF Frequency', value: `${t.vhf_frequency ?? '--'} MHz` },
+    { icon: RadioIcon, label: 'UHF Frequency', value: `${t.uhf_frequency ?? '--'} MHz` },
+    { icon: RadioIcon, label: 'VHF Power', value: `${t.vhf_power ?? '--'} W` },
+    { icon: RadioIcon, label: 'UHF Power', value: `${t.uhf_power ?? '--'} W` },
     { icon: RadioIcon, label: 'Cross-band radio 1', value: `${t.cross_band_radio_1_dbm ?? '--'} dBm` },
     { icon: RadioIcon, label: 'Cross-band radio 2', value: `${t.cross_band_radio_2_dbm ?? '--'} dBm` },
     { icon: RadioIcon, label: 'LoRa', value: `${t.lora_rssi_dbm ?? '--'} dBm` },
     { icon: Battery, label: 'Battery', value: `${t.battery_v ?? '--'} V / ${t.battery_current_ma ?? '--'} mA` },
+    { icon: RadioIcon, label: 'Current Draw', value: `${t.battery_current_ma ?? '--'} mA` },
+    { icon: Thermometer, label: 'Temperature', value: `${t.temperature_c ?? '--'} °C` },
+    { icon: RadioIcon, label: 'Status', value: `${t.status ?? '--'}` },
     { icon: Mountain, label: 'Altitude', value: `${t.altitude_m ?? '--'} m` },
     { icon: ArrowLeft, label: 'Vertical Speed', value: `${t.vertical_speed_ms >= 0 ? '+' : ''}${t.vertical_speed_ms ?? 0} m/s` },
   ] : [];
