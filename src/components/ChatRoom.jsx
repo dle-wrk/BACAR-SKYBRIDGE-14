@@ -2,48 +2,66 @@ import { useEffect, useMemo, useState } from 'react';
 import { MessageSquareText, SendHorizonal, Users } from 'lucide-react';
 import { observerDisplayName } from '@/lib/observer';
 
-const USERS_KEY = 'bacar_chat_users_v1';
-const MESSAGES_KEY = 'bacar_chat_messages_v1';
+const ROOM_KEY = 'bacar_mission_chat_room_v1';
 const CHANNEL_NAME = 'bacar_chat_channel_v1';
 const PRESENCE_TTL_MS = 60_000;
+const MAX_MESSAGES = 80;
 
-function readUsers() {
+function getSessionId() {
+  if (typeof window === 'undefined') return 'guest';
+
+  const existing = window.sessionStorage.getItem('bacar_chat_session_id');
+  if (existing) return existing;
+
+  const next = `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.sessionStorage.setItem('bacar_chat_session_id', next);
+  return next;
+}
+
+function readRoom() {
   try {
-    const raw = localStorage.getItem(USERS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem(ROOM_KEY);
+    const parsed = raw ? JSON.parse(raw) : { users: [], messages: [] };
+    const users = Array.isArray(parsed.users) ? parsed.users : [];
+    const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
     const now = Date.now();
-    return (Array.isArray(parsed) ? parsed : []).filter((user) => now - (user.lastSeen || 0) < PRESENCE_TTL_MS);
+
+    return {
+      users: users.filter((user) => now - (user.lastSeen || 0) < PRESENCE_TTL_MS),
+      messages: messages.slice(-MAX_MESSAGES),
+    };
   } catch {
-    return [];
+    return { users: [], messages: [] };
   }
 }
 
-function writeUsers(users) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+function writeRoom(nextRoom) {
+  localStorage.setItem(
+    ROOM_KEY,
+    JSON.stringify({
+      users: Array.isArray(nextRoom.users) ? nextRoom.users.slice(-100) : [],
+      messages: Array.isArray(nextRoom.messages) ? nextRoom.messages.slice(-MAX_MESSAGES) : [],
+    })
+  );
 }
 
-function readMessages() {
-  try {
-    const raw = localStorage.getItem(MESSAGES_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(-80) : [];
-  } catch {
-    return [];
-  }
+function syncRoomState() {
+  const room = readRoom();
+  return room;
 }
 
-function writeMessages(messages) {
-  localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages.slice(-80)));
-}
-
-function emitPresence(type, payload) {
+function emitRoomEvent(type, payload) {
   if (typeof window === 'undefined') return;
-  const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL_NAME) : null;
-  if (channel) {
-    channel.postMessage({ type, payload });
+
+  const eventPayload = { type, payload, sentAt: Date.now() };
+
+  if ('BroadcastChannel' in window) {
+    const channel = new BroadcastChannel(CHANNEL_NAME);
+    channel.postMessage(eventPayload);
     channel.close();
   }
-  window.dispatchEvent(new CustomEvent('bacar-chat-sync', { detail: { type, payload } }));
+
+  window.dispatchEvent(new CustomEvent('bacar-chat-room-sync', { detail: eventPayload }));
 }
 
 function getUserKey(user) {
@@ -54,60 +72,74 @@ function getUserKey(user) {
 export default function ChatRoom({ observer }) {
   const currentUserName = observer ? observerDisplayName(observer) : 'Guest';
   const [draft, setDraft] = useState('');
-  const [users, setUsers] = useState(readUsers());
-  const [messages, setMessages] = useState(readMessages());
+  const [users, setUsers] = useState(() => syncRoomState().users);
+  const [messages, setMessages] = useState(() => syncRoomState().messages);
 
   useEffect(() => {
     if (!observer) return;
 
-    const nextUsers = readUsers();
+    const sessionId = getSessionId();
+    const updateRoomFromStorage = () => {
+      const room = readRoom();
+      setUsers(room.users);
+      setMessages(room.messages);
+    };
+
     const nextEntry = {
+      sessionId,
       key: getUserKey(observer),
       username: currentUserName,
       type: observer?.type || 'guest',
       lastSeen: Date.now(),
     };
-    const merged = nextUsers.filter((user) => user.key !== nextEntry.key);
-    merged.push(nextEntry);
-    writeUsers(merged);
-    setUsers(merged);
-    emitPresence('presence', { users: merged });
 
-    const sync = () => {
-      setUsers(readUsers());
-      setMessages(readMessages());
+    const existingRoom = readRoom();
+    const mergedUsers = existingRoom.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
+    mergedUsers.push(nextEntry);
+
+    const nextRoom = {
+      ...existingRoom,
+      users: mergedUsers,
     };
+
+    writeRoom(nextRoom);
+    setUsers(mergedUsers);
+    emitRoomEvent('presence', { users: mergedUsers });
 
     const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL_NAME) : null;
     if (channel) {
       channel.onmessage = (event) => {
-        if (event.data?.type === 'presence' || event.data?.type === 'chat-message') {
-          sync();
+        const { type } = event.data || {};
+        if (type === 'presence' || type === 'chat-message') {
+          updateRoomFromStorage();
         }
       };
     }
-    window.addEventListener('storage', sync);
-    window.addEventListener('bacar-chat-sync', sync);
+
+    window.addEventListener('storage', updateRoomFromStorage);
+    window.addEventListener('bacar-chat-room-sync', updateRoomFromStorage);
 
     const heartbeat = window.setInterval(() => {
-      const allUsers = readUsers();
-      const refreshed = allUsers.filter((user) => user.key !== nextEntry.key);
-      refreshed.push({ ...nextEntry, lastSeen: Date.now() });
-      writeUsers(refreshed);
-      setUsers(refreshed);
-      emitPresence('presence', { users: refreshed });
+      const room = readRoom();
+      const refreshedUsers = room.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
+      refreshedUsers.push({ ...nextEntry, lastSeen: Date.now() });
+      const refreshedRoom = { ...room, users: refreshedUsers };
+      writeRoom(refreshedRoom);
+      setUsers(refreshedUsers);
+      emitRoomEvent('presence', { users: refreshedUsers });
     }, 15_000);
 
     return () => {
       window.clearInterval(heartbeat);
       if (channel) channel.close();
-      window.removeEventListener('storage', sync);
-      window.removeEventListener('bacar-chat-sync', sync);
+      window.removeEventListener('storage', updateRoomFromStorage);
+      window.removeEventListener('bacar-chat-room-sync', updateRoomFromStorage);
 
-      const remainingUsers = readUsers().filter((user) => user.key !== nextEntry.key);
-      writeUsers(remainingUsers);
+      const remainingRoom = readRoom();
+      const remainingUsers = remainingRoom.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
+      writeRoom({ ...remainingRoom, users: remainingUsers });
       setUsers(remainingUsers);
-      emitPresence('presence', { users: remainingUsers });
+      emitRoomEvent('presence', { users: remainingUsers });
     };
   }, [observer, currentUserName]);
 
@@ -126,11 +158,13 @@ export default function ChatRoom({ observer }) {
       sentAt: Date.now(),
     };
 
-    const nextMessages = [...readMessages(), nextMessage].slice(-80);
-    writeMessages(nextMessages);
+    const room = readRoom();
+    const nextMessages = [...room.messages, nextMessage].slice(-MAX_MESSAGES);
+    const nextRoom = { ...room, messages: nextMessages };
+    writeRoom(nextRoom);
     setMessages(nextMessages);
     setDraft('');
-    emitPresence('chat-message', { message: nextMessage });
+    emitRoomEvent('chat-message', { message: nextMessage });
   };
 
   return (
