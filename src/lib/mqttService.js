@@ -76,7 +76,7 @@ const CUBE_CONFIGS = [
 ];
 
 const BROKER_KEY = 'bacar_broker_url_v1';
-const DEFAULT_BROKER_URL = 'ws://broker.emqx.io:8083/mqtt';
+const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 const HISTORY_MAX = 180; // ~15 min at 5s cadence
 const BACAR_14C_NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
 
@@ -96,6 +96,14 @@ function asNumber(value) {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function normalizeBrokerUrl(url) {
+  const trimmed = url.trim();
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && trimmed.startsWith('ws://')) {
+    return trimmed.replace(/^ws:\/\//, 'wss://').replace(':8083', ':8084');
+  }
+  return trimmed;
 }
 
 function normalizeTelemetryPayload(payload) {
@@ -167,7 +175,8 @@ class TelemetryService {
     this.simStartedAt = 0;
     this.mode = 'idle';
     const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
-    this.brokerUrl = savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl;
+    this.brokerUrl = normalizeBrokerUrl(savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl);
+    if (savedBrokerUrl !== this.brokerUrl) localStorage.setItem(BROKER_KEY, this.brokerUrl);
   }
 
   getAlerts() { return this.alerts; }
@@ -240,7 +249,7 @@ class TelemetryService {
   getBrokerUrl() { return this.brokerUrl; }
 
   setBrokerUrl(url) {
-    this.brokerUrl = url.trim();
+    this.brokerUrl = normalizeBrokerUrl(url);
     localStorage.setItem(BROKER_KEY, this.brokerUrl);
   }
 

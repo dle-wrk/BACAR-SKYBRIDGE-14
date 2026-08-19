@@ -38,10 +38,8 @@ export default function ConnectionSettings({ open, onClose }) {
         </div>
 
         <p className="text-sm text-muted-foreground mb-4">
-          Connect to the EMQX MQTT broker over WebSocket. The supplied <code className="font-mono text-xs text-accent">broker.emqx.io:1883</code>{' '}
-          address is exposed to browsers through its WebSocket endpoint. Enter a broker URL (must use{' '}
-          <code className="font-mono text-xs text-accent">ws://</code> or{' '}
-          <code className="font-mono text-xs text-accent">wss://</code>).
+          Connect to the EMQX MQTT broker over secure WebSocket. The supplied <code className="font-mono text-xs text-accent">broker.emqx.io:1883</code>{' '}
+          address is exposed to HTTPS browsers through <code className="font-mono text-xs text-accent">wss://broker.emqx.io:8084/mqtt</code>.
         </p>
 
         <div className="space-y-2">
@@ -50,7 +48,7 @@ export default function ConnectionSettings({ open, onClose }) {
             id="broker"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="ws://broker.emqx.io:8083/mqtt"
+            placeholder="wss://broker.emqx.io:8084/mqtt"
             className="font-mono"
           />
           <p className="text-xs text-muted-foreground">
