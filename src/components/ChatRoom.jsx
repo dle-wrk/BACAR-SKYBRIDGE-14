@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
+import mqtt from 'mqtt';
 import { MessageSquareText, SendHorizonal, Users } from 'lucide-react';
 import { observerDisplayName } from '@/lib/observer';
+import { telemetry } from '@/lib/mqttService';
 
 const ROOM_KEY = 'bacar_mission_chat_room_v1';
 const CHANNEL_NAME = 'bacar_chat_channel_v1';
+const MQTT_CHAT_TOPIC = 'bacar/skybridge14/mission-chat';
+const MQTT_PRESENCE_TOPIC = 'bacar/skybridge14/mission-presence';
 const PRESENCE_TTL_MS = 60_000;
 const MAX_MESSAGES = 80;
 
@@ -18,36 +22,43 @@ function getSessionId() {
   return next;
 }
 
+function normalizeRoom(room) {
+  const users = Array.isArray(room?.users) ? room.users : [];
+  const messages = Array.isArray(room?.messages) ? room.messages : [];
+  const now = Date.now();
+
+  return {
+    users: users
+      .filter((user) => now - (user.lastSeen || 0) < PRESENCE_TTL_MS)
+      .map((user) => ({
+        ...user,
+        key: user.key || `${user.type || 'guest'}:${user.username || 'guest'}:${user.sessionId || 'unknown'}`.toLowerCase(),
+      })),
+    messages: messages
+      .filter((message) => message && typeof message.text === 'string')
+      .slice(-MAX_MESSAGES),
+  };
+}
+
 function readRoom() {
   try {
     const raw = localStorage.getItem(ROOM_KEY);
     const parsed = raw ? JSON.parse(raw) : { users: [], messages: [] };
-    const users = Array.isArray(parsed.users) ? parsed.users : [];
-    const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
-    const now = Date.now();
-
-    return {
-      users: users.filter((user) => now - (user.lastSeen || 0) < PRESENCE_TTL_MS),
-      messages: messages.slice(-MAX_MESSAGES),
-    };
+    return normalizeRoom(parsed);
   } catch {
     return { users: [], messages: [] };
   }
 }
 
 function writeRoom(nextRoom) {
+  const normalized = normalizeRoom(nextRoom);
   localStorage.setItem(
     ROOM_KEY,
     JSON.stringify({
-      users: Array.isArray(nextRoom.users) ? nextRoom.users.slice(-100) : [],
-      messages: Array.isArray(nextRoom.messages) ? nextRoom.messages.slice(-MAX_MESSAGES) : [],
+      users: normalized.users.slice(-100),
+      messages: normalized.messages.slice(-MAX_MESSAGES),
     })
   );
-}
-
-function syncRoomState() {
-  const room = readRoom();
-  return room;
 }
 
 function emitRoomEvent(type, payload) {
@@ -64,86 +75,138 @@ function emitRoomEvent(type, payload) {
   window.dispatchEvent(new CustomEvent('bacar-chat-room-sync', { detail: eventPayload }));
 }
 
-function getUserKey(user) {
+function getUserKey(user, sessionIdOverride) {
   const username = observerDisplayName(user) || 'guest';
-  return `${user?.type || 'guest'}:${username}`.toLowerCase();
+  const sessionId = sessionIdOverride || user?.sessionId || user?.id || Math.random().toString(16).slice(2);
+  return `${user?.type || 'guest'}:${username}:${sessionId}`.toLowerCase();
+}
+
+function mergeUsers(users, nextUser) {
+  const withoutCurrent = users.filter((user) => user.sessionId !== nextUser.sessionId);
+  withoutCurrent.push(nextUser);
+  return withoutCurrent;
 }
 
 export default function ChatRoom({ observer }) {
   const currentUserName = observer ? observerDisplayName(observer) : 'Guest';
   const [draft, setDraft] = useState('');
-  const [users, setUsers] = useState(() => syncRoomState().users);
-  const [messages, setMessages] = useState(() => syncRoomState().messages);
+  const [users, setUsers] = useState(() => readRoom().users);
+  const [messages, setMessages] = useState(() => readRoom().messages);
 
   useEffect(() => {
-    if (!observer) return;
+    if (!observer) return undefined;
 
     const sessionId = getSessionId();
-    const updateRoomFromStorage = () => {
-      const room = readRoom();
-      setUsers(room.users);
-      setMessages(room.messages);
-    };
-
+    const currentRoom = readRoom();
     const nextEntry = {
       sessionId,
-      key: getUserKey(observer),
+      key: getUserKey(observer, sessionId),
       username: currentUserName,
       type: observer?.type || 'guest',
       lastSeen: Date.now(),
     };
 
-    const existingRoom = readRoom();
-    const mergedUsers = existingRoom.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
-    mergedUsers.push(nextEntry);
-
-    const nextRoom = {
-      ...existingRoom,
-      users: mergedUsers,
+    const refreshFromStorage = () => {
+      const room = readRoom();
+      setUsers(room.users);
+      setMessages(room.messages);
     };
 
-    writeRoom(nextRoom);
-    setUsers(mergedUsers);
-    emitRoomEvent('presence', { users: mergedUsers });
+    const localUsers = mergeUsers(currentRoom.users, nextEntry);
+    writeRoom({ ...currentRoom, users: localUsers });
+    setUsers(localUsers);
+    emitRoomEvent('presence', { users: localUsers });
 
+    const brokerUrl = telemetry.getBrokerUrl()?.trim();
+    let mqttClient = null;
+    let presenceTimer = null;
     const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL_NAME) : null;
+
+    if (brokerUrl) {
+      mqttClient = mqtt.connect(brokerUrl, {
+        reconnectPeriod: 4000,
+        connectTimeout: 8000,
+        clean: true,
+      });
+
+      mqttClient.on('connect', () => {
+        mqttClient.subscribe(MQTT_CHAT_TOPIC, { qos: 1 }, () => {});
+        mqttClient.subscribe(MQTT_PRESENCE_TOPIC, { qos: 1 }, () => {});
+        mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({ type: 'presence', user: nextEntry }), { qos: 1 });
+      });
+
+      mqttClient.on('message', (topic, payload) => {
+        const raw = payload.toString();
+        try {
+          const message = JSON.parse(raw);
+
+          if (topic === MQTT_PRESENCE_TOPIC && message?.type === 'presence') {
+            const room = readRoom();
+            const peer = message.user;
+            if (!peer || !peer.sessionId) return;
+            const merged = mergeUsers(room.users, { ...peer, key: getUserKey(peer, peer.sessionId), lastSeen: Date.now() });
+            const nextRoom = { ...room, users: merged };
+            writeRoom(nextRoom);
+            setUsers(merged);
+            emitRoomEvent('presence', { users: merged });
+            return;
+          }
+
+          if (topic === MQTT_CHAT_TOPIC && message?.type === 'chat-message') {
+            const room = readRoom();
+            const nextMessages = [...room.messages, message.message].slice(-MAX_MESSAGES);
+            const nextRoom = { ...room, messages: nextMessages };
+            writeRoom(nextRoom);
+            setMessages(nextMessages);
+            emitRoomEvent('chat-message', { message: message.message });
+          }
+        } catch {
+          // ignore malformed MQTT payloads
+        }
+      });
+
+      presenceTimer = window.setInterval(() => {
+        if (mqttClient && mqttClient.connected) {
+          mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({ type: 'presence', user: { ...nextEntry, lastSeen: Date.now() } }), { qos: 1 });
+        }
+      }, 15_000);
+    }
+
     if (channel) {
       channel.onmessage = (event) => {
         const { type } = event.data || {};
         if (type === 'presence' || type === 'chat-message') {
-          updateRoomFromStorage();
+          refreshFromStorage();
         }
       };
     }
 
-    window.addEventListener('storage', updateRoomFromStorage);
-    window.addEventListener('bacar-chat-room-sync', updateRoomFromStorage);
-
-    const heartbeat = window.setInterval(() => {
-      const room = readRoom();
-      const refreshedUsers = room.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
-      refreshedUsers.push({ ...nextEntry, lastSeen: Date.now() });
-      const refreshedRoom = { ...room, users: refreshedUsers };
-      writeRoom(refreshedRoom);
-      setUsers(refreshedUsers);
-      emitRoomEvent('presence', { users: refreshedUsers });
-    }, 15_000);
+    window.addEventListener('storage', refreshFromStorage);
+    window.addEventListener('bacar-chat-room-sync', refreshFromStorage);
 
     return () => {
-      window.clearInterval(heartbeat);
+      if (presenceTimer) window.clearInterval(presenceTimer);
       if (channel) channel.close();
-      window.removeEventListener('storage', updateRoomFromStorage);
-      window.removeEventListener('bacar-chat-room-sync', updateRoomFromStorage);
+      window.removeEventListener('storage', refreshFromStorage);
+      window.removeEventListener('bacar-chat-room-sync', refreshFromStorage);
+
+      if (mqttClient && mqttClient.connected) {
+        mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({ type: 'presence', user: { ...nextEntry, lastSeen: Date.now(), active: false } }), { qos: 1 });
+        mqttClient.end(true);
+      }
 
       const remainingRoom = readRoom();
-      const remainingUsers = remainingRoom.users.filter((user) => user.sessionId !== sessionId && user.key !== nextEntry.key);
+      const remainingUsers = remainingRoom.users.filter((user) => user.sessionId !== sessionId);
       writeRoom({ ...remainingRoom, users: remainingUsers });
       setUsers(remainingUsers);
       emitRoomEvent('presence', { users: remainingUsers });
     };
   }, [observer, currentUserName]);
 
-  const visibleUsers = useMemo(() => [...users].sort((a, b) => a.username.localeCompare(b.username)), [users]);
+  const visibleUsers = useMemo(
+    () => [...users].sort((a, b) => (a.username || '').localeCompare(b.username || '')),
+    [users]
+  );
 
   const handleSend = (event) => {
     event.preventDefault();
@@ -165,6 +228,25 @@ export default function ChatRoom({ observer }) {
     setMessages(nextMessages);
     setDraft('');
     emitRoomEvent('chat-message', { message: nextMessage });
+
+    const brokerUrl = telemetry.getBrokerUrl()?.trim();
+    if (brokerUrl) {
+      const mqttClient = mqtt.connect(brokerUrl, {
+        reconnectPeriod: 4000,
+        connectTimeout: 8000,
+        clean: true,
+      });
+
+      mqttClient.on('connect', () => {
+        mqttClient.publish(MQTT_CHAT_TOPIC, JSON.stringify({ type: 'chat-message', message: nextMessage }), { qos: 1 });
+        mqttClient.end(true);
+      });
+
+      mqttClient.on('error', () => {
+        // rely on the local fallback state if the broker is unavailable
+      });
+      return;
+    }
   };
 
   return (

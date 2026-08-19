@@ -8,12 +8,16 @@ import { AlertTriangle, TrendingDown, X, Bell, BellOff } from 'lucide-react';
 export default function BurstAlerts({ className = '' }) {
   const [alerts, setAlerts] = useState(telemetry.getAlerts());
   const [enabled, setEnabled] = useState(true);
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   const seen = useRef(new Set());
 
   useEffect(() => {
     const unsub = telemetry.subscribeAlerts((list) => {
-      if (!enabled) { setAlerts(list); return; }
+      if (!enabled) {
+        dismiss();
+        setAlerts(list);
+        return;
+      }
       list.forEach((a) => {
         if (!seen.current.has(a.id)) {
           seen.current.add(a.id);
@@ -21,14 +25,14 @@ export default function BurstAlerts({ className = '' }) {
             title: a.type === 'burst' ? 'BURST DETECTED' : 'Rapid Descent',
             description: `${a.cube_name} — ${a.message}`,
             variant: a.type === 'burst' ? 'destructive' : 'default',
-            duration: 9000,
+            duration: 5000,
           });
         }
       });
       setAlerts(list);
     });
     return unsub;
-  }, [toast, enabled]);
+  }, [toast, dismiss, enabled]);
 
   const visibleAlerts = alerts.slice(0, 3);
 

@@ -20,7 +20,7 @@ export default function TopBar({ observer, onSignOut, onOpenSettings }) {
   }, []);
 
   const statusLabel = mode === 'live' ? 'LIVE MQTT' : mode === 'sim' ? 'SIMULATION' : 'OFFLINE';
-  const statusColor = mode === 'live' ? 'text-emerald-400' : mode === 'sim' ? 'text-amber-400' : 'text-muted-foreground';
+  const statusColor = mode === 'live' ? 'text-emerald-300' : mode === 'sim' ? 'text-amber-300' : 'text-muted-foreground';
 
   return (
     <header className="sticky top-0 z-30 strat-card border-b border-border/60">
@@ -52,8 +52,8 @@ export default function TopBar({ observer, onSignOut, onOpenSettings }) {
                 ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
                 : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
           }`}>
-            <Wifi className="w-3.5 h-3.5" />
-            <span>{statusLabel}</span>
+            <Wifi className={`w-3.5 h-3.5 ${statusColor}`} />
+            <span className={statusColor}>{statusLabel}</span>
           </div>
         </div>
 
