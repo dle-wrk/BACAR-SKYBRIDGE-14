@@ -39,15 +39,21 @@ export default function TopBar({ observer, onSignOut, onOpenSettings }) {
 
         <div className="flex-1" />
 
-        <div className="hidden md:flex items-center gap-4 text-xs">
+        <div className="hidden md:flex items-center gap-3 text-xs">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3.5 h-3.5 text-muted-foreground" />
             <span className="text-muted-foreground">CUBEs</span>
             <span className="font-mono font-semibold">{active}/{cubeCount}</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <Wifi className={`w-3.5 h-3.5 ${statusColor}`} />
-            <span className={`font-mono font-semibold ${statusColor}`}>{statusLabel}</span>
+          <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono font-semibold ${
+            mode === 'live'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : mode === 'sim'
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+          }`}>
+            <Wifi className="w-3.5 h-3.5" />
+            <span>{statusLabel}</span>
           </div>
         </div>
 
