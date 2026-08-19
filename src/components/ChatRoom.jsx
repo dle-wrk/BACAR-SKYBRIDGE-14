@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import mqtt from 'mqtt';
-import { MessageSquareText, SendHorizonal, Users, X } from 'lucide-react';
+import { MessageSquareText, SendHorizonal, Users, Wifi, X } from 'lucide-react';
 import { observerDisplayName } from '@/lib/observer';
 import { MQTT_TOPICS, telemetry } from '@/lib/mqttService';
 
@@ -133,6 +133,7 @@ export default function ChatRoom({ observer }) {
   const [users, setUsers] = useState(() => readRoom().users);
   const [messages, setMessages] = useState(() => readRoom().messages);
   const [typingUsers, setTypingUsers] = useState([]);
+  const [mqttConnected, setMqttConnected] = useState(false);
   const mqttClientRef = useRef(null);
   const typingTimerRef = useRef(null);
 
@@ -173,9 +174,10 @@ export default function ChatRoom({ observer }) {
       });
 
       mqttClient.on('connect', () => {
-        mqttClient.subscribe(MQTT_CHAT_TOPIC, { qos: 1 }, () => {});
-        mqttClient.subscribe(MQTT_PRESENCE_TOPIC, { qos: 1 }, () => {});
+        mqttClient.subscribe(MQTT_CHAT_TOPIC, { qos: 1 }, () => { });
+        mqttClient.subscribe(MQTT_PRESENCE_TOPIC, { qos: 1 }, () => { });
         mqttClientRef.current = mqttClient;
+        setMqttConnected(true);
         mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
           type: 'presence',
           sender: currentUserName,
@@ -183,6 +185,9 @@ export default function ChatRoom({ observer }) {
           session_id: sessionId,
         }), { qos: 1 });
       });
+
+      mqttClient.on('close', () => setMqttConnected(false));
+      mqttClient.on('offline', () => setMqttConnected(false));
 
       mqttClient.on('message', (topic, payload) => {
         const raw = payload.toString();
@@ -215,12 +220,16 @@ export default function ChatRoom({ observer }) {
 
           if (topic === MQTT_CHAT_TOPIC && message?.type === 'typing') {
             const sender = message.sender || 'Guest';
-            setTypingUsers((current) => message.is_typing
-              ? [...new Set([...current, sender])]
-              : current.filter((user) => user !== sender));
-            window.setTimeout(() => {
-              setTypingUsers((current) => current.filter((user) => user !== sender));
-            }, 5000);
+            const isTyping = message.is_typing ?? message.isTyping ?? false;
+            setTypingUsers((current) => {
+              const filtered = current.filter((user) => user !== sender);
+              return isTyping ? [...new Set([...filtered, sender])] : filtered;
+            });
+            if (isTyping) {
+              window.setTimeout(() => {
+                setTypingUsers((current) => current.filter((user) => user !== sender));
+              }, 4000);
+            }
           }
         } catch {
           // ignore malformed MQTT payloads
@@ -255,6 +264,7 @@ export default function ChatRoom({ observer }) {
       if (presenceTimer) window.clearInterval(presenceTimer);
       if (typingTimerRef.current) window.clearTimeout(typingTimerRef.current);
       mqttClientRef.current = null;
+      setMqttConnected(false);
       if (channel) channel.close();
       window.removeEventListener('storage', refreshFromStorage);
       window.removeEventListener('bacar-chat-room-sync', refreshFromStorage);
@@ -295,6 +305,7 @@ export default function ChatRoom({ observer }) {
       type: observer?.type || 'guest',
       text,
       sentAt,
+      color: observer?.color || '#4fc3f7',
     };
     const wireMessage = {
       type: 'message',
@@ -312,23 +323,13 @@ export default function ChatRoom({ observer }) {
     setDraft('');
     emitRoomEvent('chat-message', { message: nextMessage });
 
-    const brokerUrl = telemetry.getBrokerUrl()?.trim();
-    if (brokerUrl) {
-      const mqttClient = mqtt.connect(brokerUrl, {
-        reconnectPeriod: 4000,
-        connectTimeout: 8000,
-        clean: true,
-      });
-
-      mqttClient.on('connect', () => {
-        mqttClient.publish(MQTT_CHAT_TOPIC, JSON.stringify(wireMessage), { qos: 1 });
-        mqttClient.end(true);
-      });
-
-      mqttClient.on('error', () => {
-        // rely on the local fallback state if the broker is unavailable
-      });
-      return;
+    const client = mqttClientRef.current;
+    if (client?.connected) {
+      client.publish(
+        MQTT_CHAT_TOPIC,
+        JSON.stringify(wireMessage),
+        { qos: 1 }
+      );
     }
   };
 
@@ -340,13 +341,13 @@ export default function ChatRoom({ observer }) {
     client.publish(MQTT_CHAT_TOPIC, JSON.stringify({
       type: 'typing',
       sender: currentUserName,
-      is_typing: Boolean(value.trim()),
+      isTyping: Boolean(value.trim()),
     }), { qos: 0 });
     if (typingTimerRef.current) window.clearTimeout(typingTimerRef.current);
     if (value.trim()) {
       typingTimerRef.current = window.setTimeout(() => {
         client.publish(MQTT_CHAT_TOPIC, JSON.stringify({
-          type: 'typing', sender: currentUserName, is_typing: false,
+          type: 'typing', sender: currentUserName, isTyping: false,
         }), { qos: 0 });
       }, 1500);
     }
@@ -377,6 +378,10 @@ export default function ChatRoom({ observer }) {
               <h3 className="font-heading text-lg font-semibold">Mission Chat</h3>
             </div>
             <div className="flex items-center gap-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-muted-foreground/20 bg-muted/20 px-2.5 py-1 font-mono font-semibold text-muted-foreground">
+                <Wifi className="w-3.5 h-3.5" />
+                <span>{mqttConnected ? 'ONLINE' : 'OFFLINE'}</span>
+              </div>
               <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/50 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
                 <Users className="w-3 h-3" />
                 {visibleUsers.length}
@@ -392,68 +397,68 @@ export default function ChatRoom({ observer }) {
             </div>
           </div>
 
-      <div className="mb-4 rounded-xl border border-border/60 bg-background/40 p-3">
-        <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Signed in users</div>
-        <div className="flex flex-wrap gap-2">
-          {visibleUsers.length === 0 ? (
-            <span className="text-sm text-muted-foreground">No users yet</span>
-          ) : (
-            visibleUsers.map((user) => (
-              <span
-                key={user.key}
-                className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-1 text-xs text-foreground"
-              >
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                {user.username}
-              </span>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="space-y-2 flex-1 overflow-y-auto pr-1 min-h-0">
-        {messages.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-            Start the mission chat.
-          </div>
-        ) : (
-          messages.map((message) => (
-            <div key={message.id} className="rounded-xl border border-border/60 bg-background/40 p-2.5">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-foreground">{message.username}</span>
-                <span className="text-[10px] text-muted-foreground">
-                  {new Date(message.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-              <p className="text-sm leading-relaxed text-muted-foreground">{message.text}</p>
+          <div className="mb-4 rounded-xl border border-border/60 bg-background/40 p-3">
+            <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Signed in users</div>
+            <div className="flex flex-wrap gap-2">
+              {visibleUsers.length === 0 ? (
+                <span className="text-sm text-muted-foreground">No users yet</span>
+              ) : (
+                visibleUsers.map((user) => (
+                  <span
+                    key={user.key}
+                    className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-1 text-xs text-foreground"
+                  >
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    {user.username}
+                  </span>
+                ))
+              )}
             </div>
-          ))
-        )}
-      </div>
+          </div>
 
-      {typingUsers.length > 0 && (
-        <div className="mt-2 text-[10px] text-muted-foreground">
-          {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
-        </div>
-      )}
+          <div className="space-y-2 flex-1 overflow-y-auto pr-1 min-h-0">
+            {messages.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
+                Start the mission chat.
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div key={message.id} className="rounded-xl border border-border/60 bg-background/40 p-2.5">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">{message.username}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {new Date(message.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{message.text}</p>
+                </div>
+              ))
+            )}
+          </div>
 
-      <form onSubmit={handleSend} className="mt-4 flex gap-2">
-        <input
-          value={draft}
-          onChange={handleDraftChange}
-          placeholder={observer ? `Message as ${currentUserName}` : 'Sign in to chat'}
-          disabled={!observer}
-          className="flex-1 rounded-xl border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={!observer || !draft.trim()}
-          className="inline-flex items-center justify-center rounded-xl bg-accent px-3 py-2 text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Send chat message"
-        >
-          <SendHorizonal className="w-4 h-4" />
-        </button>
-      </form>
+          {typingUsers.length > 0 && (
+            <div className="mt-2 text-[10px] text-muted-foreground">
+              {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
+            </div>
+          )}
+
+          <form onSubmit={handleSend} className="mt-4 flex gap-2">
+            <input
+              value={draft}
+              onChange={handleDraftChange}
+              placeholder={observer ? `Message as ${currentUserName}` : 'Sign in to chat'}
+              disabled={!observer}
+              className="flex-1 rounded-xl border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!observer || !draft.trim()}
+              className="inline-flex items-center justify-center rounded-xl bg-accent px-3 py-2 text-black transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Send chat message"
+            >
+              <SendHorizonal className="w-4 h-4" />
+            </button>
+          </form>
         </aside>
       )}
     </div>
