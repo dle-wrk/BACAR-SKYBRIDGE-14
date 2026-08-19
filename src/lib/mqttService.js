@@ -80,6 +80,8 @@ class TelemetryService {
     this.alerts = [];
     this.lastAlertAt = {}; // `${cubeId}:${type}` -> timestamp, for cooldown
     this.client = null;
+    this.simTimer = null;
+    this.simStartedAt = 0;
     this.mode = 'idle';
     this.brokerUrl = localStorage.getItem(BROKER_KEY) || '';
   }
@@ -216,11 +218,13 @@ class TelemetryService {
   }
 
   connect(brokerUrl) {
-    if (brokerUrl) this.setBrokerUrl(brokerUrl);
+    if (typeof brokerUrl === 'string') {
+      this.setBrokerUrl(brokerUrl);
+    }
     const url = this.brokerUrl;
     this.disconnect();
     if (!url) {
-      this.mode = 'idle';
+      this._startSim();
       return;
     }
     this.mode = 'mqtt';
@@ -272,18 +276,79 @@ class TelemetryService {
       try { this.client.end(true); } catch {}
       this.client = null;
     }
+    if (this.simTimer) {
+      clearInterval(this.simTimer);
+      this.simTimer = null;
+    }
     this.mode = 'idle';
   }
 
   _startSim() {
-    this.mode = 'idle';
+    this.disconnect();
+    this.mode = 'sim';
+    this.simStartedAt = Date.now();
+    this._emit();
+
+    this.simTimer = setInterval(() => {
+      const now = Date.now();
+      const elapsedSecs = (now - this.simStartedAt) / 1000;
+
+      this.cubes.forEach((cube, index) => {
+        const profile = cube.profile;
+        const climbProgress = Math.min(1, elapsedSecs / 48);
+        const altitudeBoost = (profile.burstAlt - profile.startAlt) * climbProgress;
+        const altitude = profile.startAlt + altitudeBoost + Math.sin(elapsedSecs / 7 + index) * 120;
+        const verticalSpeed = elapsedSecs < 45
+          ? profile.startVel * 4.5 + Math.sin(elapsedSecs / 5 + index) * 0.9
+          : -Math.abs(Math.sin(elapsedSecs / 6 + index)) * 8 - 4.5;
+
+        const latitude = profile.startLat + Math.sin(elapsedSecs / 12 + index) * 0.00018;
+        const longitude = profile.startLon + Math.cos(elapsedSecs / 14 + index) * 0.00022;
+        const temperature = profile.tempOffset + Math.sin(elapsedSecs / 9 + index) * 2.5;
+
+        const point = {
+          id: cube.id,
+          cube_id: cube.id,
+          t: now,
+          altitude_m: Math.max(1200, altitude),
+          vertical_speed_ms: verticalSpeed,
+          latitude,
+          longitude,
+          gps_lat: latitude,
+          gps_lon: longitude,
+          temperature_c: temperature,
+          pressure_hpa: 62 + Math.sin(elapsedSecs / 10 + index) * 8,
+          battery_voltage_v: 3.9 + Math.sin(elapsedSecs / 11 + index) * 0.12,
+          current_ma: 120 + Math.cos(elapsedSecs / 9 + index) * 25,
+          signal_rssi_dbm: -82 + Math.sin(elapsedSecs / 8 + index) * 12,
+          state_of_charge_pct: 92 - (elapsedSecs * 0.18),
+          total_distance_km: (Math.max(0, elapsedSecs - 8) * 0.28) + index * 0.2,
+          horizontal_distance_km: Math.max(0, (elapsedSecs * 0.18) + index * 0.1),
+          booster_voltage_v: 7.5 + Math.sin(elapsedSecs / 10 + index) * 0.4,
+          payload_health: 98 - (elapsedSecs * 0.09),
+          mode: cube.mode,
+          source: 'simulation',
+        };
+
+        this._applyTelemetry(cube.id, point);
+
+        if (cube.mode === 'nrf_image_only' && elapsedSecs % 9 < 0.5) {
+          const generated = `https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=800&q=80&sig=${(index + 1) * 7 + Math.floor(elapsedSecs)}`;
+          this._applyImage(cube.id, generated);
+        }
+      });
+    }, 2500);
   }
 
   _stopSim() {
+    if (this.simTimer) {
+      clearInterval(this.simTimer);
+      this.simTimer = null;
+    }
     this.mode = 'idle';
   }
 
-  isSim() { return false; }
+  isSim() { return this.mode === 'sim'; }
   isLive() { return this.mode === 'mqtt'; }
 }
 
