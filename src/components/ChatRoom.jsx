@@ -164,6 +164,7 @@ export default function ChatRoom({ observer }) {
     const brokerUrl = telemetry.getBrokerUrl()?.trim();
     let mqttClient = null;
     let presenceTimer = null;
+    const typingTimersBySender = new Map();
     const channel = 'BroadcastChannel' in window ? new BroadcastChannel(CHANNEL_NAME) : null;
 
     if (brokerUrl) {
@@ -171,18 +172,30 @@ export default function ChatRoom({ observer }) {
         reconnectPeriod: 4000,
         connectTimeout: 8000,
         clean: true,
+        will: {
+          topic: MQTT_PRESENCE_TOPIC,
+          payload: JSON.stringify({
+            type: 'presence',
+            sender: currentUserName,
+            status: 'offline',
+            session_id: sessionId,
+          }),
+          qos: 1,
+          retain: false,
+        },
       });
+      mqttClientRef.current = mqttClient;
 
       mqttClient.on('connect', () => {
         mqttClient.subscribe(MQTT_CHAT_TOPIC, { qos: 1 }, () => { });
         mqttClient.subscribe(MQTT_PRESENCE_TOPIC, { qos: 1 }, () => { });
-        mqttClientRef.current = mqttClient;
         setMqttConnected(true);
         mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
           type: 'presence',
           sender: currentUserName,
           status: 'online',
           session_id: sessionId,
+          user_type: observer?.type || 'guest',
         }), { qos: 1 });
       });
 
@@ -209,26 +222,34 @@ export default function ChatRoom({ observer }) {
           }
 
           if (topic === MQTT_CHAT_TOPIC && (message?.type === 'message' || message?.type === 'chat-message')) {
+            const normalized = normalizeChatMessage(message);
+            if (!normalized) return;
             const room = readRoom();
-            const result = appendMessage(room, normalizeChatMessage(message));
+            const result = appendMessage(room, normalized);
             if (!result.added) return;
             writeRoom(result.room);
             setMessages(result.room.messages);
-            emitRoomEvent('chat-message', { message: normalizeChatMessage(message) });
+            emitRoomEvent('chat-message', { message: normalized });
             return;
           }
 
           if (topic === MQTT_CHAT_TOPIC && message?.type === 'typing') {
             const sender = message.sender || 'Guest';
+            if (sender === currentUserName) return;
             const isTyping = message.is_typing ?? message.isTyping ?? false;
             setTypingUsers((current) => {
               const filtered = current.filter((user) => user !== sender);
-              return isTyping ? [...new Set([...filtered, sender])] : filtered;
+              return isTyping ? [...filtered, sender] : filtered;
             });
+            const existing = typingTimersBySender.get(sender);
+            if (existing) window.clearTimeout(existing);
+            typingTimersBySender.delete(sender);
             if (isTyping) {
-              window.setTimeout(() => {
+              const handle = window.setTimeout(() => {
+                typingTimersBySender.delete(sender);
                 setTypingUsers((current) => current.filter((user) => user !== sender));
               }, 4000);
+              typingTimersBySender.set(sender, handle);
             }
           }
         } catch {
@@ -263,20 +284,24 @@ export default function ChatRoom({ observer }) {
     return () => {
       if (presenceTimer) window.clearInterval(presenceTimer);
       if (typingTimerRef.current) window.clearTimeout(typingTimerRef.current);
+      typingTimersBySender.forEach((handle) => window.clearTimeout(handle));
+      typingTimersBySender.clear();
       mqttClientRef.current = null;
       setMqttConnected(false);
       if (channel) channel.close();
       window.removeEventListener('storage', refreshFromStorage);
       window.removeEventListener('bacar-chat-room-sync', refreshFromStorage);
 
-      if (mqttClient && mqttClient.connected) {
-        mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
-          type: 'presence',
-          sender: currentUserName,
-          status: 'offline',
-          session_id: sessionId,
-        }), { qos: 1 });
-        mqttClient.end(true);
+      if (mqttClient) {
+        if (mqttClient.connected) {
+          mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
+            type: 'presence',
+            sender: currentUserName,
+            status: 'offline',
+            session_id: sessionId,
+          }), { qos: 1 });
+        }
+        try { mqttClient.end(true); } catch { /* ignore */ }
       }
 
       const remainingRoom = readRoom();

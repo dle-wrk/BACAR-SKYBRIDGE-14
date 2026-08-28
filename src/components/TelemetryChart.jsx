@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart } from 'recharts';
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart } from 'recharts';
 
 // Altitude / vertical-speed chart for a single cube's history.
 export default function TelemetryChart({ history, metric = 'altitude_m', color = '#38bdf8', label = 'Altitude (m)', height = 200 }) {

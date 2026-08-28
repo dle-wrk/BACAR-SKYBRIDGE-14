@@ -184,7 +184,7 @@ class TelemetryService {
   subscribeAlerts(listener) {
     this.alertListeners.add(listener);
     listener(this.alerts);
-    return () => this.alertListeners.delete(listener);
+    return () => { this.alertListeners.delete(listener); };
   }
 
   dismissAlert(id) {
@@ -266,7 +266,7 @@ class TelemetryService {
   subscribe(listener) {
     this.listeners.add(listener);
     listener(this.cubes);
-    return () => this.listeners.delete(listener);
+    return () => { this.listeners.delete(listener); };
   }
 
   _emit() {
