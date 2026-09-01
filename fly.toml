@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for bacar-skybridge-14 on 2026-08-19T13:12:54Z
+# fly.toml app configuration file for bacar-skybridge-14
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -12,13 +12,21 @@ kill_timeout = '60s'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
-  min_machines_running = 0
+  # 1 keeps a machine warm so the first visitor after idle doesn't wait on a cold
+  # start. Set to 0 to save money on a demo that can tolerate a few seconds.
+  min_machines_running = 1
   processes = ['app']
 
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 200
+    hard_limit = 250
+
+# Static asset serving needs very little. Only one memory key is legal — the
+# original file set both `memory = '1gb'` and `memory_mb = 256`.
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
