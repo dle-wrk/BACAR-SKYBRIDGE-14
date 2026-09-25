@@ -1,5 +1,7 @@
-import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock, Globe } from 'lucide-react';
 import { useSstvReceiver } from '@/lib/useSstvReceiver';
+import { telemetry } from '@/lib/mqttService';
 
 const MODE_ROWS = [
   { id: 'robot36',   label: 'Robot 36',   seconds: 36,  resolution: '320×240', primary: true,  decodable: true  },
@@ -34,8 +36,42 @@ function downloadHref(url, filename) {
 export default function SstvTelemetry() {
   const rx = useSstvReceiver();
 
-  const listening   = rx.state === 'listening' || rx.state === 'receiving';
-  const receiving   = rx.state === 'receiving';
+  const listening = rx.state === 'listening' || rx.state === 'receiving';
+  const receiving = rx.state === 'receiving';
+
+  // Subscribe to remote captures — every other viewer that decodes an SSTV
+  // frame publishes to sstv/status and lands in the telemetry service's
+  // history. Merge those with local captures, dedupe on t, newest first.
+  const [, setTick] = useState(0);
+  useEffect(() => telemetry.subscribe(() => setTick((n) => n + 1)), []);
+  const remoteHistory = telemetry.getSstvHistory();
+
+  const allCaptures = useMemo(() => {
+    const byKey = new Map();
+    for (const c of rx.captures) {
+      byKey.set(`local:${c.t}`, c);
+    }
+    for (const r of remoteHistory) {
+      const png = r.thumbnail || r.png || null;
+      // Skip echoes of our own broadcasts — same t within 2s means we already
+      // have this one locally with a WAV url.
+      const isEcho = rx.captures.some((c) => Math.abs(c.t - (r.t || 0)) < 2000 && c.mode === r.mode);
+      if (isEcho) continue;
+      byKey.set(`remote:${r.t}:${r.mode}`, {
+        t: r.t || Date.now(),
+        mode: r.mode || 'unknown',
+        modeLabel: r.mode_label || r.mode || 'SSTV',
+        vis: r.vis,
+        seconds: r.seconds,
+        wavUrl: null,          // WAVs are never broadcast
+        wavBytes: r.wav_bytes,
+        png,
+        imageBytes: r.image_bytes,
+        local: false,
+      });
+    }
+    return Array.from(byKey.values()).sort((a, b) => b.t - a.t).slice(0, 20);
+  }, [rx.captures, remoteHistory]);
 
   return (
     <section className="strat-card rounded-2xl border border-border/60 p-4 sm:p-5 mb-7">
@@ -196,15 +232,20 @@ export default function SstvTelemetry() {
         </div>
       </div>
 
-      {rx.captures.length > 0 && (
+      {allCaptures.length > 0 && (
         <div>
-          <div className="mb-2 flex items-center gap-2">
-            <Clock className="h-3.5 w-3.5 text-accent" />
-            <h3 className="font-heading text-sm font-semibold">Recent captures</h3>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Clock className="h-3.5 w-3.5 text-accent" />
+              <h3 className="font-heading text-sm font-semibold">Recent captures</h3>
+            </div>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              shared across all viewers
+            </span>
           </div>
           <div className="space-y-3">
-            {rx.captures.map((c) => (
-              <div key={c.t} className="rounded-xl border border-border/60 bg-background/40 p-3">
+            {allCaptures.map((c) => (
+              <div key={`${c.local ? 'l' : 'r'}:${c.t}`} className="rounded-xl border border-border/60 bg-background/40 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-mono uppercase text-accent">
@@ -214,7 +255,13 @@ export default function SstvTelemetry() {
                       <span className="text-[10px] font-mono text-muted-foreground">VIS {c.vis}</span>
                     )}
                     <span className="text-[10px] font-mono text-muted-foreground">{timeAgo(c.t)}</span>
-                    <span className="text-[10px] font-mono text-muted-foreground">{c.seconds}s</span>
+                    {c.seconds && <span className="text-[10px] font-mono text-muted-foreground">{c.seconds}s</span>}
+                    {!c.local && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-secondary/50 px-1.5 py-0.5 text-[10px] font-mono uppercase text-muted-foreground">
+                        <Globe className="h-2.5 w-2.5" />
+                        shared
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     {c.png && downloadHref(c.png, `sstv_${c.mode}_${c.t}.png`)}

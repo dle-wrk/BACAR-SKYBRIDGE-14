@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { VISDetector, DECODERS, MODES, rgbaToPngDataUrl, samplesToWavBlob } from '@/lib/sstv';
+import { telemetry } from '@/lib/mqttService';
 
 // One-stop hook that owns the getUserMedia stream, the AudioContext, and
 // the SSTV state machine. Consumers just call start()/stop() and read state.
@@ -59,8 +60,7 @@ export function useSstvReceiver() {
       try {
         const rgba = decoder(audio, sampleRate);
         imagePng = rgbaToPngDataUrl(rgba);
-        // rough byte count via base64 length
-        imageBytes = Math.round((imagePng.length - 22) * 3 / 4);
+        imageBytes = Math.round(((imagePng.length - 22) * 3) / 4);
       } catch (exc) {
         console.warn('[sstv] decode error', exc);
       }
@@ -75,8 +75,25 @@ export function useSstvReceiver() {
       wavBytes: wavBlob.size,
       png: imagePng,
       imageBytes,
+      local: true,
     };
     setCaptures((prev) => [entry, ...prev].slice(0, 20));
+
+    // Broadcast to every other viewer via MQTT so their SSTV tab shows the
+    // same image. WAV stays local — too big to sensibly publish. PNG only.
+    telemetry.publishSstvCapture({
+      event:       'captured',
+      status:      'captured',
+      role:        'browser',
+      mode:        mode.key,
+      mode_label:  mode.label,
+      vis:         mode.vis,
+      seconds:     mode.seconds,
+      thumbnail:   imagePng,
+      image_bytes: imageBytes,
+      wav_bytes:   wavBlob.size,
+      duration_s:  Number((audio.length / sampleRate).toFixed(1)),
+    });
   }, []);
 
   const start = useCallback(async () => {

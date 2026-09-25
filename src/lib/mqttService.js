@@ -351,6 +351,23 @@ class TelemetryService {
   }
 
   /**
+   * Broadcast an SSTV capture to every other viewer. Called by the in-browser
+   * receiver when it locks on and decodes a frame. Silent no-op when the MQTT
+   * client isn't connected — a local capture is still visible to the operator
+   * who ran it; sharing is best-effort.
+   */
+  publishSstvCapture(payload) {
+    if (!this.client || !this.client.connected) return false;
+    try {
+      const msg = { ...payload, t: payload.t || Date.now(), source: 'browser' };
+      this.client.publish(MQTT_TOPICS.sstvStatus, JSON.stringify(msg), { qos: 0 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * @param {Function} listener
    * @returns {() => void}
    */
