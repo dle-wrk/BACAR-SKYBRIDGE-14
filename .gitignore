@@ -30,3 +30,9 @@ dist-ssr
 .env
 .vite
 base44/.app.jsonc
+
+# FreeCAD auto-backups — clutter, not source
+*.FCBak
+
+# Arduino build output (per-sketch)
+firmware/**/build/

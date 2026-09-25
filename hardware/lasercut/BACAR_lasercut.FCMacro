@@ -1,0 +1,224 @@
+# ============================================================
+#  BACAR PYRAMID CUBE - laser-cut panel generator (FreeCAD macro)
+#
+#  HOW TO USE
+#  1. Open FreeCAD. Menu: Macro > Macros... > Create, name it
+#     "bacar_lasercut", paste this whole file in, Save.
+#  2. Set THICK below to your MEASURED acrylic thickness (calipers!).
+#  3. Press the green Run arrow. Six panels + 2 brackets appear,
+#     laid out flat and spaced for nesting.
+#  4. Select a panel's top face > File > Export > DXF (or select all
+#     and export one nested DXF). Send those to the laser cutter.
+#
+#  Everything is parametric: change THICK or CUBE and re-run.
+# ============================================================
+import FreeCAD as App
+import Part
+import math
+
+# ---------------- EDIT THESE ----------------
+THICK = 3      # <-- MEASURED acrylic thickness in mm
+CUBE  = 100.0    # outer cube edge
+KERF  = 0.10     # slot oversize per side for an easy fit (0 = exact)
+NFING = 5        # fingers per 100 mm edge (keep odd)
+# --------------------------------------------
+
+APERTURE_D  = 64.0     # floor light hole
+APERTURE_CY = -13.0    # offset toward camera wall
+ANT_D       = 7.0      # antenna hole
+ANT_Z       = 53.0     # antenna height on nRF wall
+CAM_TILT    = 18.0     # camera plate angle
+CAM_HOLE_SP = 28.5     # ESP32 mount hole spacing
+CAM_M2      = 2.0      # ESP32 screw hole dia
+CAM_LENS_D  = 10.0     # lens clearance hole
+STRING_D    = 3.4      # corner hole dia: 3.4 = fits 3 mm carbon tube; use 2.5 for bare cord
+STRING_INSET= 8.0      # tube/string holes inset from each edge (clears the finger slots)
+RING_D      = 4.0      # keyring / suspension-link hole
+RING_INSET  = 15.0     # inset for ring holes (far enough from tube holes to look clean)
+
+t = THICK
+cav = CUBE - 2*t
+fw = CUBE / NFING
+
+doc = App.newDocument("BACAR_lasercut")
+
+# ---- helpers -------------------------------------------------
+def rect(x, y, w, h):
+    """closed wire rectangle at (x,y) size w,h"""
+    pts = [App.Vector(x,y,0), App.Vector(x+w,y,0),
+           App.Vector(x+w,y+h,0), App.Vector(x,y+h,0), App.Vector(x,y,0)]
+    return Part.makePolygon(pts)
+
+def panel(name, width, height, slots=None, holes=None, place=(0,0)):
+    """flat panel: outer rectangle minus slot rectangles and round holes,
+       extruded by t. slots = list of (x,y,w,h). holes = list of (cx,cy,d)."""
+    outer = Part.Face(rect(0,0,width,height))
+    solid = outer.extrude(App.Vector(0,0,t))
+    cuts = []
+    if slots:
+        for (x,y,w,h) in slots:
+            cuts.append(Part.Face(rect(x-KERF, y-KERF, w+2*KERF, h+2*KERF)).extrude(App.Vector(0,0,t)))
+    if holes:
+        for (cx,cy,d) in holes:
+            cyl = Part.makeCylinder(d/2, t, App.Vector(cx,cy,0))
+            cuts.append(cyl)
+    for c in cuts:
+        solid = solid.cut(c)
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = solid
+    obj.Placement.Base = App.Vector(place[0], place[1], 0)
+    return obj
+
+def finger_slots_horizontal(width, yline, tab=True):
+    """slots along a horizontal edge at y=yline (for mating wall tabs).
+       returns list of (x,y,w,h) rectangles of depth t."""
+    s = []
+    for i in range(NFING):
+        if (i % 2 == (0 if tab else 1)):
+            continue
+        x = i*fw
+        s.append((x, yline, fw, t))
+    return s
+
+# ---- FLOOR (full 100x100, aperture + edge slots) ------------
+# slots on all four edges to receive wall tabs
+floor_slots = []
+for i in range(NFING):
+    if i % 2 == 1:  # slot positions
+        floor_slots.append((i*fw, 0.0, fw, t))            # bottom edge
+        floor_slots.append((i*fw, CUBE-t, fw, t))         # top edge
+        floor_slots.append((0.0, i*fw, t, fw))            # left edge
+        floor_slots.append((CUBE-t, i*fw, t, fw))         # right edge
+floor_holes = [(CUBE/2, CUBE/2+APERTURE_CY, APERTURE_D)]
+# pyramid base-locator clip slots (at wall midpoints, clear of corner holes)
+import math as _m
+_bh = (85.0 + 2*2.0*_m.cos(_m.radians(54)))/2   # half of ~87.4 base
+floor_slots.append((CUBE/2-4, CUBE/2-_bh-3, 8, t))
+floor_slots.append((CUBE/2-4, CUBE/2+_bh+2, 8, t))
+floor_slots.append((CUBE/2-_bh-3, CUBE/2-4, t, 8))
+floor_slots.append((CUBE/2+_bh+2, CUBE/2-4, t, 8))
+# four corner holes for the suspension tubes / string
+_corners = [(STRING_INSET,STRING_INSET),(CUBE-STRING_INSET,STRING_INSET),
+            (STRING_INSET,CUBE-STRING_INSET),(CUBE-STRING_INSET,CUBE-STRING_INSET)]
+# four corner keyring / suspension-link holes (further in, so they read clean)
+_ring_corners = [(RING_INSET,RING_INSET),(CUBE-RING_INSET,RING_INSET),
+                 (RING_INSET,CUBE-RING_INSET),(CUBE-RING_INSET,CUBE-RING_INSET)]
+for (cx,cy) in _corners:
+    floor_holes.append((cx,cy,STRING_D))
+for (cx,cy) in _ring_corners:
+    floor_holes.append((cx,cy,RING_D))
+panel("FLOOR", CUBE, CUBE, slots=floor_slots, holes=floor_holes, place=(0,0))
+
+# ---- LID (full 100x100, support slots + ring holes) ---------
+lid_slots = list(floor_slots)  # same edge pattern
+# two slots for the pyramid-top support legs
+lid_slots.append((CUBE/2-12, CUBE/2-1, 8, t))
+lid_slots.append((CUBE/2+4,  CUBE/2-1, 8, t))
+lid_holes = []
+# four corner keyring holes (match FLOOR inset)
+for (cx,cy) in _ring_corners:
+    lid_holes.append((cx,cy,RING_D))
+# four corner holes for the suspension tubes / string (match FLOOR)
+for (cx,cy) in _corners:
+    lid_holes.append((cx,cy,STRING_D))
+panel("LID", CUBE, CUBE, slots=lid_slots, holes=lid_holes, place=(CUBE+15,0))
+
+# ---- WALLS: 100 wide x cav tall, tabs top & bottom ----------
+def wall_edge_tabs():
+    """tabs (protruding) drawn as part of outline is complex; instead we
+       cut mating slots in floor/lid and leave wall edges plain with
+       small locating tabs represented as slots in the OTHER part.
+       For simplicity here walls are plain rectangles with side slots
+       for L/R interlock; glue provides strength."""
+    return []
+
+def wall(name, place, extra_holes=None, extra_slots=None):
+    slots = []
+    # left/right vertical edge slots to interlock adjacent walls
+    for i in range(NFING):
+        if i % 2 == 1 and i*fw < cav:
+            slots.append((0.0, i*fw, t, min(fw, cav-i*fw)))
+            slots.append((CUBE-t, i*fw, t, min(fw, cav-i*fw)))
+    if extra_slots: slots += extra_slots
+    panel(name, CUBE, cav, slots=slots, holes=extra_holes, place=place)
+
+# WALL_CAM: solid except camera-bracket slots in FLOOR (handled on floor);
+# here add two slots near the base for the camera triangle-bracket tabs
+cam_bracket_slots = [(CUBE/2-25, 1.0, t, 10), (CUBE/2+25-t, 1.0, t, 10)]
+wall("WALL_CAM", (0, CUBE+15), extra_slots=cam_bracket_slots)
+# WALL_NRF: antenna hole
+wall("WALL_NRF", (CUBE+15, CUBE+15), extra_holes=[(CUBE/2, ANT_Z, ANT_D)])
+# WALL_L and WALL_R
+wall("WALL_L", (2*(CUBE+15), 0))
+wall("WALL_R", (2*(CUBE+15), CUBE+15))
+
+# ---- CAMERA BRACKET: two 18deg triangles + one camera plate --
+run = 45.0
+rise = run * math.tan(math.radians(CAM_TILT))
+def triangle_bracket(name, place):
+    pts = [App.Vector(0,0,0), App.Vector(run,0,0), App.Vector(run,rise,0), App.Vector(0,0,0)]
+    face = Part.Face(Part.makePolygon(pts))
+    sol = face.extrude(App.Vector(0,0,t))
+    # foot tab to slot into floor
+    tab = Part.Face(rect(run/2-5, -t, 10, t)).extrude(App.Vector(0,0,t))
+    sol = sol.fuse(tab)
+    o = doc.addObject("Part::Feature", name); o.Shape = sol
+    o.Placement.Base = App.Vector(place[0], place[1], 0)
+triangle_bracket("CAM_TRI_1", (0, 2*(CUBE+15)))
+triangle_bracket("CAM_TRI_2", (run+15, 2*(CUBE+15)))
+
+# camera plate: flat, ESP32 holes + lens hole
+plate_w, plate_h = 45.0, 32.0
+plate_holes = [(plate_w/2-CAM_HOLE_SP/2, plate_h/2, CAM_M2),
+               (plate_w/2+CAM_HOLE_SP/2, plate_h/2, CAM_M2),
+               (plate_w/2, plate_h/2, CAM_LENS_D)]
+panel("CAM_PLATE", plate_w, plate_h, holes=plate_holes, place=(2*run+30, 2*(CUBE+15)))
+
+# ---- PYRAMID TOP SUPPORT: small plate with 9mm square hole ---
+sup = 26.0
+sup_face = Part.Face(rect(0,0,sup,sup))
+sup_sol = sup_face.extrude(App.Vector(0,0,t))
+sq = Part.Face(rect(sup/2-4.7, sup/2-4.7, 9.4, 9.4)).extrude(App.Vector(0,0,t))
+sup_sol = sup_sol.cut(sq)
+# two legs (tabs) to slot into the lid
+for lx in (sup/2-8, sup/2+4):
+    leg = Part.Face(rect(lx, -t, 4, t)).extrude(App.Vector(0,0,t))
+    sup_sol = sup_sol.fuse(leg)
+o = doc.addObject("Part::Feature", "PYRAMID_TOP_SUPPORT")
+o.Shape = sup_sol
+o.Placement.Base = App.Vector(3*(CUBE+15), 2*(CUBE+15), 0)
+
+# ---- PYRAMID BASE LOCATORS: four L-clips that slot into the floor ----
+# They form a ~87.4 mm square pocket the pyramid base sits inside, so the
+# base can't slide. Each clip tabs down through a floor slot.
+base_out = 2*_bh   # ~87.4
+def base_clip(name, place, rot):
+    # small upright wall segment, 20 long x 6 tall, with a foot tab
+    seg = Part.Face(rect(0,0,20,6)).extrude(App.Vector(0,0,t))
+    foot = Part.Face(rect(6,-t,8,t)).extrude(App.Vector(0,0,t))
+    sol = seg.fuse(foot)
+    o = doc.addObject("Part::Feature", name); o.Shape = sol
+    o.Placement = App.Placement(App.Vector(place[0],place[1],0),
+                                App.Rotation(App.Vector(0,0,1), rot))
+# lay the four clips out flat for cutting (assembly position noted in comments)
+base_clip("PYR_BASE_CLIP_1", (3*(CUBE+15), 0), 0)
+base_clip("PYR_BASE_CLIP_2", (3*(CUBE+15), 15), 0)
+base_clip("PYR_BASE_CLIP_3", (3*(CUBE+15), 30), 0)
+base_clip("PYR_BASE_CLIP_4", (3*(CUBE+15), 45), 0)
+
+doc.recompute()
+try:
+    Gui.activeDocument().activeView().viewAxonometric()
+    Gui.SendMsgToActiveView("ViewFit")
+except Exception:
+    pass
+
+App.Console.PrintMessage(
+    "Done. THICK=%.2f  cavity=%.1f  aperture=%.0f\n"
+    "Panels: FLOOR LID WALL_CAM WALL_NRF WALL_L WALL_R\n"
+    "Brackets: CAM_TRI_1 CAM_TRI_2 CAM_PLATE PYRAMID_TOP_SUPPORT\n"
+    "Corner string holes added to FLOOR and LID (dia %.1f at inset %.0f).\n"
+    "NB: run four %.0f mm carbon tubes between floor and lid corners as\n"
+    "    columns; the string threads through them and carries the load.\n"
+    "Export each part's flat face to DXF for the cutter.\n"
+    % (THICK, cav, APERTURE_D, STRING_D, STRING_INSET, CUBE))

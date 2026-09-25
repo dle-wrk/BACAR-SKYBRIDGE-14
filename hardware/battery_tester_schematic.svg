@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="1370" viewBox="0 0 680 685" role="img">
+<title>18650 battery capacity tester schematic</title>
+<desc>18650 cell to INA219 high-side shunt, 4 ohm load and IRL520N low-side switch driven from Arduino D5. INA219 on I2C A4/A5. ST7735 OLED on hardware SPI through a 4-channel level shifter. TP4056 charger across the cell.</desc>
+<style>
+  text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; }
+  .t  { font-size: 14px; fill: #222; }
+  .th { font-size: 14px; font-weight: 600; fill: #222; }
+  .ts { font-size: 12px; fill: #555; }
+  .c-teal > rect { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.8; }
+  .c-teal > .th { fill: #085041; } .c-teal > .ts { fill: #0F6E56; }
+  .c-gray > rect { fill: #F1EFE8; stroke: #5F5E5A; stroke-width: 0.8; }
+  .c-gray > .th { fill: #444441; } .c-gray > .ts { fill: #5F5E5A; }
+  rect.c-teal { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.8; }
+  rect.c-gray { fill: #F1EFE8; stroke: #5F5E5A; stroke-width: 0.8; }
+</style>
+<rect width="680" height="685" fill="#ffffff"/>
+
+<g class="c-teal"><rect x="40" y="50" width="100" height="90" rx="4"/><text class="th" x="90" y="96" text-anchor="middle">TP4056</text><text class="ts" x="90" y="112" text-anchor="middle">USB charger</text><text class="ts" x="132" y="74" text-anchor="end">B+</text><text class="ts" x="132" y="129" text-anchor="end">B−</text></g>
+
+<g class="c-gray"><rect x="260" y="45" width="130" height="95" rx="4"/><text class="ts" x="268" y="74">Vin+</text><text class="ts" x="382" y="74" text-anchor="end">Vin−</text><text class="th" x="325" y="104" text-anchor="middle">INA219</text><text class="ts" x="278" y="132" text-anchor="middle">VCC</text><text class="ts" x="308" y="132" text-anchor="middle">GND</text><text class="ts" x="342" y="132" text-anchor="middle">SDA</text><text class="ts" x="372" y="132" text-anchor="middle">SCL</text></g>
+
+<g class="c-gray"><rect x="200" y="240" width="240" height="160" rx="4"/><text class="ts" x="278" y="258" text-anchor="middle">5V</text><text class="ts" x="308" y="258" text-anchor="middle">GND</text><text class="ts" x="342" y="258" text-anchor="middle">A4</text><text class="ts" x="372" y="258" text-anchor="middle">A5</text><text class="ts" x="432" y="278" text-anchor="end">D5</text><text class="th" x="320" y="318" text-anchor="middle">Arduino Uno R3</text><text class="ts" x="320" y="336" text-anchor="middle">5 V logic, USB powered</text><text class="ts" x="270" y="392" text-anchor="middle">D13</text><text class="ts" x="310" y="392" text-anchor="middle">D11</text><text class="ts" x="350" y="392" text-anchor="middle">D10</text><text class="ts" x="390" y="392" text-anchor="middle">D9</text></g>
+
+<g class="c-teal"><rect x="200" y="440" width="240" height="90" rx="4"/><text class="ts" x="270" y="458" text-anchor="middle">HV1</text><text class="ts" x="310" y="458" text-anchor="middle">HV2</text><text class="ts" x="350" y="458" text-anchor="middle">HV3</text><text class="ts" x="390" y="458" text-anchor="middle">HV4</text><text class="ts" x="208" y="476">HV</text><text class="ts" x="208" y="496">LV</text><text class="ts" x="208" y="516">GND</text><text class="th" x="330" y="484" text-anchor="middle">Level-4p shifter</text><text class="ts" x="330" y="500" text-anchor="middle">5 V ↔ 3.3 V</text><text class="ts" x="270" y="522" text-anchor="middle">LV1</text><text class="ts" x="310" y="522" text-anchor="middle">LV2</text><text class="ts" x="350" y="522" text-anchor="middle">LV3</text><text class="ts" x="390" y="522" text-anchor="middle">LV4</text></g>
+
+<g class="c-teal"><rect x="200" y="570" width="240" height="90" rx="4"/><text class="ts" x="270" y="588" text-anchor="middle">SCL</text><text class="ts" x="310" y="588" text-anchor="middle">SDA</text><text class="ts" x="350" y="588" text-anchor="middle">CS</text><text class="ts" x="390" y="588" text-anchor="middle">DC</text><text class="ts" x="208" y="600">VCC</text><text class="ts" x="208" y="616">GND</text><text class="ts" x="208" y="632">RES</text><text class="ts" x="208" y="648">BLK</text><text class="th" x="340" y="620" text-anchor="middle">OLED-IPS-096</text><text class="ts" x="340" y="638" text-anchor="middle">ST7735 80×160, 3.3 V</text></g>
+
+<g fill="none" stroke="#D85A30" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+<path d="M140 70 H220"/><path d="M244 70 H260"/><path d="M220 70 L241 57"/><path d="M200 70 V95"/><path d="M200 103 V125"/><path d="M140 125 H160 V135"/>
+<path d="M390 70 H465"/>
+<path d="M465 52 V88"/><path d="M465 52 H480"/><path d="M465 88 H480"/><path d="M530 52 H545"/><path d="M530 88 H545"/><path d="M545 52 V88"/>
+<path d="M545 70 H580 V115 H566"/><path d="M566 145 H580 V178"/>
+</g>
+<circle cx="220" cy="70" r="2.5" fill="#ffffff" stroke="#222" stroke-width="1.2"/><circle cx="244" cy="70" r="2.5" fill="#ffffff" stroke="#222" stroke-width="1.2"/>
+<text class="ts" x="232" y="48" text-anchor="middle">SW1</text>
+<g fill="#D85A30"><circle cx="200" cy="70" r="3.5"/><circle cx="465" cy="70" r="3.5"/><circle cx="545" cy="70" r="3.5"/></g>
+
+<g fill="none" stroke="#222" stroke-width="1.5" stroke-linecap="round">
+<path d="M186 95 H214"/><path d="M193 103 H207" stroke-width="4"/>
+<path d="M150 135 H170 M154 139 H166 M158 143 H162"/>
+<path d="M190 125 H210 M194 129 H206 M198 133 H202"/>
+<path d="M570 178 H590 M574 182 H586 M578 186 H582"/>
+<path d="M520 265 H540 M524 269 H536 M528 273 H532"/>
+<rect x="480" y="44" width="50" height="16"/><rect x="480" y="80" width="50" height="16"/>
+<path d="M566 108 V152" stroke-width="3"/><path d="M558 112 V148"/>
+<path d="M278 140 V240 M308 140 V240 M342 140 V240 M372 140 V240"/>
+<path d="M440 274 H450 V200 H460"/><rect x="460" y="194" width="40" height="12"/><path d="M500 200 H530"/>
+<path d="M558 130 H530 V215"/><rect x="524" y="215" width="12" height="40"/><path d="M530 255 V265"/>
+<path d="M270 400 V440 M310 400 V440 M350 400 V440 M390 400 V440"/>
+<path d="M270 530 V570 M310 530 V570 M350 530 V570 M390 530 V570"/>
+<path d="M200 472 H180 M200 492 H180 M200 512 H180"/>
+<path d="M200 596 H180 M200 612 H180 M200 628 H180 M200 644 H180"/>
+</g>
+<circle cx="530" cy="200" r="3.5" fill="#222"/>
+<polygon points="567,145 575,141 575,149" fill="#222"/>
+
+
+<text class="ts" x="182" y="93" text-anchor="end">+</text>
+<text class="ts" x="218" y="104">18650</text>
+<text class="ts" x="505" y="56" text-anchor="middle">8 Ω</text>
+<text class="ts" x="505" y="92" text-anchor="middle">8 Ω</text>
+<text class="ts" x="505" y="118" text-anchor="middle">4 Ω, 20 W</text>
+<text class="t" x="592" y="126">IRL520N</text>
+<text class="ts" x="592" y="144">+ heatsink</text>
+<text class="ts" x="480" y="186" text-anchor="middle">220 Ω</text>
+<text class="ts" x="542" y="240">10k</text>
+<text class="ts" x="176" y="476" text-anchor="end">5V</text>
+<text class="ts" x="176" y="496" text-anchor="end">3V3</text>
+<text class="ts" x="176" y="516" text-anchor="end">GND</text>
+<text class="ts" x="176" y="600" text-anchor="end">3V3</text>
+<text class="ts" x="176" y="616" text-anchor="end">GND</text>
+<text class="ts" x="176" y="632" text-anchor="end">3V3</text>
+<text class="ts" x="176" y="648" text-anchor="end">3V3</text>
+
+<g fill="none" stroke="#222" stroke-width="1.5" stroke-linecap="round">
+<path d="M200 270 H163 M127 270 H110 M126 261 H164 M145 261 V255"/>
+<path d="M200 320 H163 M127 320 H110 M126 311 H164 M145 311 V305"/>
+<path d="M200 370 H163 M127 370 H110 M126 361 H164 M145 361 V355"/>
+</g>
+<g fill="#ffffff" stroke="#222" stroke-width="1.2">
+<circle cx="160" cy="270" r="2.5"/><circle cx="130" cy="270" r="2.5"/>
+<circle cx="160" cy="320" r="2.5"/><circle cx="130" cy="320" r="2.5"/>
+<circle cx="160" cy="370" r="2.5"/><circle cx="130" cy="370" r="2.5"/>
+</g>
+<text class="ts" x="145" y="250" text-anchor="middle">START</text>
+<text class="ts" x="145" y="300" text-anchor="middle">STOP</text>
+<text class="ts" x="145" y="350" text-anchor="middle">RESET</text>
+<text class="ts" x="106" y="274" text-anchor="end">GND</text>
+<text class="ts" x="106" y="324" text-anchor="end">GND</text>
+<text class="ts" x="106" y="374" text-anchor="end">GND</text>
+<text class="ts" x="208" y="274" fill="#5F5E5A">D2</text>
+<text class="ts" x="208" y="324" fill="#5F5E5A">D3</text>
+<text class="ts" x="208" y="374" fill="#5F5E5A">D4</text>
+
+<g fill="none" stroke="#222" stroke-width="1.5" stroke-linecap="round">
+<path d="M440 304 H491" stroke-dasharray="4 3"/>
+<circle cx="505" cy="304" r="14"/>
+<path d="M519 304 H540 V318" stroke-dasharray="4 3"/>
+<path d="M530 318 H550 M534 322 H546 M538 326 H542"/>
+</g>
+<text class="ts" x="505" y="308" text-anchor="middle">BZ</text>
+<text class="ts" x="486" y="296" text-anchor="end">+</text>
+<text class="ts" x="505" y="346" text-anchor="middle">5 V buzzer (optional)</text>
+<text class="ts" x="432" y="308" text-anchor="end" fill="#5F5E5A">D6</text>
+
+<path d="M480 592 H510" stroke="#D85A30" stroke-width="3" fill="none"/><text class="ts" x="520" y="596">~1 A current path</text>
+<rect x="482" y="608" width="26" height="14" rx="3" class="c-teal"/><text class="ts" x="520" y="619">Added part</text>
+<rect x="482" y="630" width="26" height="14" rx="3" class="c-gray"/><text class="ts" x="520" y="641">Original part</text>
+</svg>
