@@ -532,7 +532,11 @@ class TelemetryService {
             this.sstvStatus = stamped;
             // Keep a rolling window of recent bridge events so the SSTV
             // tab can show what's been transmitted lately.
-            if (stamped.event === 'encoded' || stamped.status === 'encoded') {
+            // Both the encoder ('encoded') and the receiver ('captured') push
+            // event rows the SSTV tab renders in its Recent list.
+            const isRow = ['encoded', 'captured'].includes(stamped.event) ||
+                          ['encoded', 'captured'].includes(stamped.status);
+            if (isRow) {
               this.sstvHistory = [stamped, ...this.sstvHistory].slice(0, SSTV_HISTORY_MAX);
             }
             this._emit();
