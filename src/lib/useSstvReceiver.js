@@ -109,26 +109,21 @@ export function useSstvReceiver() {
       const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
       contextRef.current = ctx;
       sampleRateRef.current = ctx.sampleRate;
+
+      // Load the AudioWorklet processor. Served from public/ so Vite doesn't
+      // bundle it — the worklet runs in a separate audio thread and needs
+      // its own script URL to load into that thread.
+      await ctx.audioWorklet.addModule('/sstv-worklet.js');
       const source = ctx.createMediaStreamSource(stream);
-      const bufSize = 4096;
-      const processor = ctx.createScriptProcessor(bufSize, 1, 1);
+      const worklet = new AudioWorkletNode(ctx, 'sstv-capture');
       const detector = new VISDetector(ctx.sampleRate);
       detectorRef.current = detector;
       setState('listening');
       // Refresh device list now that we have permission — labels appear.
       refreshDevices();
 
-      processor.onaudioprocess = (ev) => {
-        const input = ev.inputBuffer.getChannelData(0);
-        // Copy — the buffer is reused.
-        const chunk = new Float32Array(input.length);
-        chunk.set(input);
-        // Peak level for the meter
-        let peak = 0;
-        for (let i = 0; i < chunk.length; i++) {
-          const abs = Math.abs(chunk[i]);
-          if (abs > peak) peak = abs;
-        }
+      worklet.port.onmessage = (ev) => {
+        const { chunk, peak } = ev.data;
         setAudioLevel(peak);
 
         if (modeRef.current === null) {
@@ -136,9 +131,10 @@ export function useSstvReceiver() {
           const hit = detector.scan();
           if (hit) {
             modeRef.current = { ...hit.mode, vis: null };
-            // Try to derive the VIS byte from the mode key -> table
             for (const [visStr, m] of Object.entries(MODES)) {
-              if (m === hit.mode) modeRef.current.vis = `0x${Number(visStr).toString(16).padStart(2, '0').toUpperCase()}`;
+              if (m === hit.mode) {
+                modeRef.current.vis = `0x${Number(visStr).toString(16).padStart(2, '0').toUpperCase()}`;
+              }
             }
             setDetected({ mode: modeRef.current, startedAt: Date.now() });
             setState('receiving');
@@ -168,10 +164,16 @@ export function useSstvReceiver() {
           }
         }
       };
-      source.connect(processor);
-      processor.connect(ctx.destination); // required for ScriptProcessorNode to fire
+
+      source.connect(worklet);
+      // A destination connect isn't strictly required for AudioWorkletNode,
+      // but it keeps the graph active on all browsers. We connect to a muted
+      // GainNode so the operator doesn't hear their own mic looped back.
+      const muteSink = ctx.createGain();
+      muteSink.gain.value = 0;
+      worklet.connect(muteSink).connect(ctx.destination);
     } catch (exc) {
-      console.error('[sstv] getUserMedia failed', exc);
+      console.error('[sstv] start failed', exc);
       setError(exc?.message || String(exc));
       setState('error');
       stop();
