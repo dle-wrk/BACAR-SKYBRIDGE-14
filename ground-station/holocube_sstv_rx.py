@@ -166,33 +166,42 @@ def freq_to_pixel(freq):
 # ============================================================
 
 class VISDetector:
-    """Fed audio chunks. On demand, scans a rolling window for the VIS
-    header signature. Returns (mode, header_end_sample_offset) when
-    the leader/break/leader/start-bit/VIS-bits pattern matches, else None.
-    header_end_sample_offset is measured from the CURRENT buffer end,
-    i.e. how many samples ago the header finished — used to line the
-    recorder up on the first line of picture data."""
+    """Fed audio chunks. On demand, scans a rolling buffer for the SSTV
+    start signature. Returns (mode, buffer_index_just_after_header) or None.
+
+    Header shape we accept (matches both the strict Martin/Wraase spec
+    and the simpler shape pysstv/most modern encoders emit):
+
+        ≥ 200 ms  of 1900 Hz leader
+        30 ms     of 1200 Hz start bit
+        8 × 30 ms VIS bits (1100 Hz = 1, 1300 Hz = 0, LSB first)
+        30 ms     even-parity bit
+        30 ms     of 1200 Hz stop bit
+
+    The strict spec has a 10 ms 1200 Hz break in the middle of the leader,
+    but we don't require it — accepting both means one detector works for
+    real HAM transmissions and synthetic pysstv test files alike."""
 
     LEADER_FREQ = 1900
-    BREAK_FREQ  = 1200
-    BIT_FREQS   = {1: 1100, 0: 1300}
-
-    LEADER_MS = 300
-    BREAK_MS  = 10
-    BIT_MS    = 30
-    HEADER_MS = 300 + 10 + 300 + 30 + 8 * 30 + 30 + 30   # ≈ 940 ms
+    START_FREQ  = 1200
+    BIT_MS      = 30
+    MIN_LEADER_MS = 200
+    # 8 vis + parity + stop after the start bit
+    POST_START_MS = 10 * 30
 
     def __init__(self, sample_rate):
         self.sr = sample_rate
         self.buf = np.zeros(0, dtype=np.float32)
-        self.leader_n = int(sample_rate * self.LEADER_MS / 1000)
-        self.break_n  = int(sample_rate * self.BREAK_MS  / 1000)
-        self.bit_n    = int(sample_rate * self.BIT_MS    / 1000)
-        self.header_n = int(sample_rate * self.HEADER_MS / 1000)
-        self.buf_max  = int(sample_rate * 3)             # keep 3 s
-        self.scan_stride = int(sample_rate * 0.05)       # 50 ms hop
+        self.bit_n     = int(sample_rate * self.BIT_MS / 1000)
+        self.leader_n  = int(sample_rate * self.MIN_LEADER_MS / 1000)
+        self.post_n    = int(sample_rate * self.POST_START_MS / 1000)
+        # We need at least leader + start + 10 VIS/parity/stop bits in the
+        # buffer to attempt a decode.
+        self.header_n  = self.leader_n + self.bit_n + self.post_n
+        self.buf_max   = int(sample_rate * 4)             # 4 s rolling window
+        self.scan_stride = int(sample_rate * 0.015)       # 15 ms hop
         self.last_scan_pos = 0
-        self.cooldown_until = 0.0                        # wall time
+        self.cooldown_until = 0.0                          # wall time
 
     def feed(self, chunk):
         chunk = chunk.reshape(-1).astype(np.float32)
@@ -203,74 +212,68 @@ class VISDetector:
             self.last_scan_pos = max(0, self.last_scan_pos - drop)
 
     def scan(self):
-        """Returns (SstvMode, end_index_in_current_buffer) or None."""
+        """Slide across the buffer looking for start bit transitions."""
         if time.time() < self.cooldown_until:
             return None
-        if len(self.buf) < self.header_n + self.leader_n:
+        if len(self.buf) < self.header_n:
             return None
 
-        end = len(self.buf) - self.header_n
-        pos = self.last_scan_pos
+        end = len(self.buf) - self.post_n
+        pos = max(self.leader_n, self.last_scan_pos)
         while pos < end:
-            if self._is_leader_at(pos):
-                mode = self._read_vis(pos)
+            # Candidate start-bit position: 30 ms of 1200 Hz preceded by
+            # ≥200 ms of 1900 Hz leader.
+            if self._is_start_at(pos) and self._is_leader_before(pos):
+                mode = self._read_vis_after(pos)
                 if mode is not None:
-                    header_end = pos + self.header_n
+                    # header_end = start bit end + 10 * bit_n (VIS+parity+stop)
+                    header_end = pos + self.bit_n + self.post_n
                     self.last_scan_pos = header_end
-                    # Cool down for at least the header window so we don't
-                    # re-trigger on the same start.
                     self.cooldown_until = time.time() + 1.0
                     return mode, header_end
             pos += self.scan_stride
         self.last_scan_pos = end
         return None
 
-    def _is_leader_at(self, pos):
-        """Check the leader-break-leader pattern starting at pos."""
-        seg1 = self.buf[pos : pos + self.leader_n]
-        seg_b = self.buf[pos + self.leader_n : pos + self.leader_n + self.break_n]
-        seg2 = self.buf[pos + self.leader_n + self.break_n : pos + 2 * self.leader_n + self.break_n]
-        if len(seg2) < self.leader_n:
+    def _is_start_at(self, pos):
+        seg = self.buf[pos : pos + self.bit_n]
+        if len(seg) < self.bit_n:
             return False
-        f1 = dominant_freq_fft(seg1, self.sr, 1600, 2100)
-        f2 = dominant_freq_fft(seg2, self.sr, 1600, 2100)
-        fb = dominant_freq_fft(seg_b, self.sr, 1100, 1300)
-        # Tolerances kept loose because loopback recording drift is real.
-        return (
-            abs(f1 - self.LEADER_FREQ) < 80 and
-            abs(f2 - self.LEADER_FREQ) < 80 and
-            abs(fb - self.BREAK_FREQ)  < 80
-        )
+        f = dominant_freq_fft(seg, self.sr, 1000, 1500)
+        return abs(f - self.START_FREQ) < 80
 
-    def _read_vis(self, leader_start):
-        """After the second leader and 30 ms start bit, read the 8 VIS
-        bits LSB-first at 30 ms each. Returns SstvMode or None."""
-        vis_start = (
-            leader_start
-            + self.leader_n         # first leader
-            + self.break_n          # break
-            + self.leader_n         # second leader
-            + self.bit_n            # start bit
-        )
+    def _is_leader_before(self, pos):
+        """Check that the 200 ms immediately before pos is dominantly 1900 Hz.
+        Sample two windows so we don't get fooled by a single stray bin."""
+        for offset_ms in (60, 140):
+            check_start = pos - int(self.sr * offset_ms / 1000)
+            if check_start < 0:
+                return False
+            seg = self.buf[check_start : check_start + int(self.sr * 0.06)]
+            f = dominant_freq_fft(seg, self.sr, 1500, 2200)
+            if abs(f - self.LEADER_FREQ) > 100:
+                return False
+        return True
+
+    def _read_vis_after(self, start_bit_pos):
+        """Read the 8 VIS bits following the start bit (LSB first)."""
+        vis_start = start_bit_pos + self.bit_n
         bits = []
         for i in range(8):
             seg = self.buf[vis_start + i * self.bit_n : vis_start + (i + 1) * self.bit_n]
             if len(seg) < self.bit_n:
                 return None
             f = dominant_freq_fft(seg, self.sr, 1000, 1400)
+            # 1100 Hz => 1, 1300 Hz => 0
             bits.append(1 if abs(f - 1100) < abs(f - 1300) else 0)
 
         vis = 0
         for i, b in enumerate(bits):
             vis |= (b << i)
 
-        mode = MODES.get(vis)
-        if mode is not None:
-            return mode
-
-        # If the byte we read isn't a known VIS code, try masking the
-        # parity bit off (VIS is 7 bits + parity in some tables).
-        return MODES.get(vis & 0x7F)
+        # Try the raw byte first (some transmissions use the full 8-bit code
+        # index directly), then the low 7 bits (parity stripped).
+        return MODES.get(vis) or MODES.get(vis & 0x7F)
 
 
 # ============================================================
@@ -286,118 +289,148 @@ def _lines_to_image(pixels, width, height):
     return Image.fromarray(arr, mode="RGB")
 
 
-def _line_frequencies(audio, sample_rate, count, samples_per_bin):
-    """Split `audio` into `count` equal bins and return the dominant
-    frequency in each. Used to map an FSK-encoded scan line to pixel values."""
-    freqs = np.zeros(count, dtype=np.float32)
-    for i in range(count):
-        start = int(round(i * samples_per_bin))
-        end   = int(round((i + 1) * samples_per_bin))
-        if end > len(audio):
-            break
-        seg = audio[start:end]
-        # For per-pixel granularity, Goertzel at the expected max/min carrier
-        # doesn't help — we want the *dominant* frequency. Use a small FFT.
-        freqs[i] = dominant_freq_fft(seg, sample_rate, 1400, 2400)
-    return freqs
+def hilbert_analytic(x):
+    """Analytic signal (Hilbert transform) via FFT — numpy-only.
+    Returns a complex-valued array of the same length as x. Used to
+    compute instantaneous frequency for FSK demod."""
+    n = len(x)
+    fft = np.fft.fft(x)
+    h = np.zeros(n)
+    if n % 2 == 0:
+        h[0] = h[n // 2] = 1
+        h[1 : n // 2] = 2
+    else:
+        h[0] = 1
+        h[1 : (n + 1) // 2] = 2
+    return np.fft.ifft(fft * h)
+
+
+def instantaneous_freq(x, sample_rate):
+    """Sample-by-sample frequency estimate of an FSK-encoded signal.
+    Returns a real array of the same length as x."""
+    z = hilbert_analytic(x)
+    phase = np.unwrap(np.angle(z))
+    df = np.diff(phase) * sample_rate / (2.0 * np.pi)
+    return np.concatenate([[df[0]], df]).astype(np.float32)
+
+
+def sample_line(freqs_1d, sample_rate, start_ms, end_ms, out_width):
+    """Slice the given instantaneous-frequency track between two ms
+    offsets and average it down to `out_width` bins — one per pixel."""
+    s = int(round(sample_rate * start_ms / 1000.0))
+    e = int(round(sample_rate * end_ms / 1000.0))
+    seg = freqs_1d[s:e]
+    if len(seg) == 0:
+        return np.zeros(out_width, dtype=np.float32)
+    # np.linspace + interpolation would work but the vectorised bucketing
+    # below is faster and gives equivalent results at these bin sizes.
+    edges = np.linspace(0, len(seg), out_width + 1).astype(int)
+    out = np.empty(out_width, dtype=np.float32)
+    for i in range(out_width):
+        chunk = seg[edges[i] : edges[i + 1]]
+        out[i] = float(np.mean(chunk)) if len(chunk) else 0.0
+    return out
 
 
 def decode_robot36(audio, sample_rate):
-    """Robot 36 — 240 lines × 150 ms. YRYBY chrominance:
-        Y always;  odd lines send R-Y,  even lines send B-Y."""
-    line_ms = 150.0
-    line_n = int(sample_rate * line_ms / 1000)
-    # Line layout (approx, ms):  9 sync + 3 porch + 88 Y + 4.5 sync + 1.5 porch + 44 chroma
-    y_start_ms  = 9 + 3
-    y_end_ms    = y_start_ms + 88
-    c_start_ms  = y_end_ms + 4.5 + 1.5
-    c_end_ms    = c_start_ms + 44
-
-    def ms_slice(line_audio, start_ms, end_ms):
-        s = int(sample_rate * start_ms / 1000)
-        e = int(sample_rate * end_ms / 1000)
-        return line_audio[s:e]
-
-    width = 320
-    height = 240
-    # Working YCbCr planes
-    y_plane  = np.zeros((height, width), dtype=np.float32)
-    ry_plane = np.zeros((height // 2 + 1, width), dtype=np.float32)
-    by_plane = np.zeros((height // 2 + 1, width), dtype=np.float32)
+    """Robot 36 — 240 lines × 150 ms.
+      Line format (ms):
+         0..9     sync         @ 1200 Hz
+         9..12    porch
+        12..100   88 ms Y      (320 px)
+       100..104.5 narrow sync  @ 1500 Hz separator
+       104.5..106 porch
+       106..150  44 ms chroma  (160 px — half-width, sub-sampled)
+      Chroma alternates per line:
+         even rows  →  R-Y
+         odd rows   →  B-Y
+      Missing chroma channel per row is copied from the nearest neighbour."""
+    line_ms  = 150.0
+    line_n   = int(sample_rate * line_ms / 1000)
+    width, height = 320, 240
+    chroma_w = 160
 
     total_needed = line_n * height
     if len(audio) < total_needed:
-        # Pad with silence — better a truncated image than a crash.
         audio = np.concatenate([audio, np.zeros(total_needed - len(audio), dtype=np.float32)])
+    audio = audio[:total_needed]
+
+    freqs = instantaneous_freq(audio, sample_rate)
+
+    y_plane  = np.zeros((height, width),    dtype=np.float32)
+    ry_plane = np.zeros((height, chroma_w), dtype=np.float32)
+    by_plane = np.zeros((height, chroma_w), dtype=np.float32)
+    have_ry  = np.zeros(height, dtype=bool)
+    have_by  = np.zeros(height, dtype=bool)
 
     for row in range(height):
-        line = audio[row * line_n : (row + 1) * line_n]
-        y_bin = ms_slice(line, y_start_ms, y_end_ms)
-        c_bin = ms_slice(line, c_start_ms, c_end_ms)
-        y_freqs = _line_frequencies(y_bin, sample_rate, width, len(y_bin) / width)
-        c_freqs = _line_frequencies(c_bin, sample_rate, width, len(c_bin) / width)
-        for x in range(width):
-            y_plane[row, x] = freq_to_pixel(y_freqs[x])
-        if row % 2 == 0:
-            for x in range(width):
-                ry_plane[row // 2, x] = freq_to_pixel(c_freqs[x])
+        row_freqs = freqs[row * line_n : (row + 1) * line_n]
+        y_freqs   = sample_line(row_freqs, sample_rate, 12,    100,   width)
+        c_freqs   = sample_line(row_freqs, sample_rate, 106.5, 149.5, chroma_w)
+        y_pixels  = np.vectorize(freq_to_pixel)(y_freqs)
+        c_pixels  = np.vectorize(freq_to_pixel)(c_freqs)
+        y_plane[row] = y_pixels
+        # Robot 36 sends R-Y on ODD lines and B-Y on EVEN lines (pysstv
+        # encoding matches this convention). The other assignment produces
+        # colour-inverted output — verified against a colour-bar test.
+        if row % 2 == 1:
+            ry_plane[row] = c_pixels
+            have_ry[row] = True
         else:
-            for x in range(width):
-                by_plane[row // 2, x] = freq_to_pixel(c_freqs[x])
+            by_plane[row] = c_pixels
+            have_by[row] = True
 
-    # Convert YCrCb (approx) -> RGB. R-Y and B-Y centered at 128.
-    rgb = np.zeros((height, width, 3), dtype=np.uint8)
+    # Fill missing R-Y and B-Y rows from the nearest neighbour that has data.
     for row in range(height):
-        ry = ry_plane[row // 2]
-        by = by_plane[row // 2]
-        y  = y_plane[row]
-        r = y + 1.402 * (ry - 128)
-        b = y + 1.772 * (by - 128)
-        g = y - 0.344 * (by - 128) - 0.714 * (ry - 128)
-        rgb[row, :, 0] = np.clip(r, 0, 255)
-        rgb[row, :, 1] = np.clip(g, 0, 255)
-        rgb[row, :, 2] = np.clip(b, 0, 255)
-    return Image.fromarray(rgb, mode="RGB")
+        if not have_ry[row]:
+            ry_plane[row] = ry_plane[max(0, row - 1)] if row > 0 else ry_plane[row + 1]
+        if not have_by[row]:
+            by_plane[row] = by_plane[max(0, row - 1)] if row > 0 else by_plane[row + 1]
+
+    # Upsample chroma horizontally to full width.
+    ry_full = np.repeat(ry_plane, 2, axis=1)
+    by_full = np.repeat(by_plane, 2, axis=1)
+
+    # YCbCr → RGB with R-Y / B-Y centred at 128.
+    y   = y_plane
+    ryc = ry_full - 128.0
+    byc = by_full - 128.0
+    r   = y + 1.402 * ryc
+    b   = y + 1.772 * byc
+    g   = y - 0.344 * byc - 0.714 * ryc
+    rgb = np.stack([np.clip(r, 0, 255), np.clip(g, 0, 255), np.clip(b, 0, 255)], axis=2)
+    return Image.fromarray(rgb.astype(np.uint8), mode="RGB")
 
 
 def decode_martinm1(audio, sample_rate):
-    """Martin M1 — 256 lines × 446.446 ms, sequential G/B/R channels
-    each 146.432 ms. Sync 4.862 ms + porch 0.572 ms per line."""
-    line_ms = 446.446
-    line_n  = int(sample_rate * line_ms / 1000)
+    """Martin M1 — 256 lines × 446.446 ms, sequential G / B / R each
+    146.432 ms. Sync 4.862 ms + porch 0.572 ms per line."""
+    line_ms  = 446.446
+    line_n   = int(sample_rate * line_ms / 1000)
+    width, height = 320, 256
 
-    sync_ms      = 4.862
-    porch_ms     = 0.572
-    ch_ms        = 146.432
-    green_start  = sync_ms + porch_ms
-    blue_start   = green_start + ch_ms + porch_ms
-    red_start    = blue_start  + ch_ms + porch_ms
-
-    width  = 320
-    height = 256
-    rgb = np.zeros((height, width, 3), dtype=np.uint8)
+    sync_ms   = 4.862
+    porch_ms  = 0.572
+    ch_ms     = 146.432
+    green_start = sync_ms + porch_ms
+    blue_start  = green_start + ch_ms + porch_ms
+    red_start   = blue_start  + ch_ms + porch_ms
 
     total_needed = line_n * height
     if len(audio) < total_needed:
         audio = np.concatenate([audio, np.zeros(total_needed - len(audio), dtype=np.float32)])
+    audio = audio[:total_needed]
+    freqs = instantaneous_freq(audio, sample_rate)
 
-    def slice_ms(line, start_ms, dur_ms):
-        s = int(sample_rate * start_ms / 1000)
-        e = int(sample_rate * (start_ms + dur_ms) / 1000)
-        return line[s:e]
-
+    rgb = np.zeros((height, width, 3), dtype=np.uint8)
     for row in range(height):
-        line = audio[row * line_n : (row + 1) * line_n]
-        g_bin = slice_ms(line, green_start, ch_ms)
-        b_bin = slice_ms(line, blue_start,  ch_ms)
-        r_bin = slice_ms(line, red_start,   ch_ms)
-        g_f = _line_frequencies(g_bin, sample_rate, width, len(g_bin) / width)
-        b_f = _line_frequencies(b_bin, sample_rate, width, len(b_bin) / width)
-        r_f = _line_frequencies(r_bin, sample_rate, width, len(r_bin) / width)
-        for x in range(width):
-            rgb[row, x, 0] = freq_to_pixel(r_f[x])
-            rgb[row, x, 1] = freq_to_pixel(g_f[x])
-            rgb[row, x, 2] = freq_to_pixel(b_f[x])
+        row_freqs = freqs[row * line_n : (row + 1) * line_n]
+        g_f = sample_line(row_freqs, sample_rate, green_start, green_start + ch_ms, width)
+        b_f = sample_line(row_freqs, sample_rate, blue_start,  blue_start  + ch_ms, width)
+        r_f = sample_line(row_freqs, sample_rate, red_start,   red_start   + ch_ms, width)
+        rgb[row, :, 0] = np.vectorize(freq_to_pixel)(r_f)
+        rgb[row, :, 1] = np.vectorize(freq_to_pixel)(g_f)
+        rgb[row, :, 2] = np.vectorize(freq_to_pixel)(b_f)
     return Image.fromarray(rgb, mode="RGB")
 
 
