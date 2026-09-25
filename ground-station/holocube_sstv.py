@@ -63,6 +63,7 @@ if PD120 is not None:
 SAMPLE_RATE = 44100
 BITS = 16
 OUT_DIR_DEFAULT = "sstv_out"
+STATUS_TOPIC = "sstv/status"  # matches MQTT_TOPICS.sstvStatus in the web app
 
 
 def resize_for_mode(img: Image.Image, mode_cls) -> Image.Image:
@@ -163,7 +164,19 @@ def cube_id_from_topic(topic: str) -> str:
     return parts[-2] if len(parts) >= 2 else "cube"
 
 
-def process_image(payload: bytes, mode: str, out_dir: str, cube: str, play: bool):
+def _publish_status(client, payload):
+    """Publish bridge state to sstv/status so the Skybridge web dashboard's
+    SSTV tab reflects what's happening. Silent on failure — the encoder
+    must never break because MQTT publish hiccuped."""
+    if client is None:
+        return
+    try:
+        client.publish(STATUS_TOPIC, json.dumps(payload), qos=0)
+    except Exception:
+        pass
+
+
+def process_image(payload: bytes, mode: str, out_dir: str, cube: str, play: bool, status_client=None):
     img_bytes = extract_image_bytes(payload)
     if img_bytes is None:
         print(f"[sstv] {cube}: could not extract JPEG from payload")
@@ -173,7 +186,20 @@ def process_image(payload: bytes, mode: str, out_dir: str, cube: str, play: bool
     wav_path = os.path.join(out_dir, f"{cube}_{stamp}_{mode}.wav")
     print(f"[sstv] {cube}: encoding {len(img_bytes)} bytes -> {wav_path} ({mode})")
     encode_to_wav(img_bytes, mode, wav_path)
-    print(f"[sstv] {cube}: wrote {wav_path}")
+    wav_size = os.path.getsize(wav_path)
+    duration_s = round(wav_size / (SAMPLE_RATE * (BITS // 8)), 1)
+    print(f"[sstv] {cube}: wrote {wav_path} ({duration_s}s)")
+    _publish_status(status_client, {
+        "event":       "encoded",
+        "status":      "encoded",
+        "cube_id":     cube,
+        "mode":        mode,
+        "wav_path":    wav_path,
+        "wav_bytes":   wav_size,
+        "image_bytes": len(img_bytes),
+        "duration_s":  duration_s,
+        "t":           int(time.time() * 1000),
+    })
     if play:
         maybe_play(wav_path)
 
@@ -186,17 +212,40 @@ def run_mqtt(broker: str, port: int, topic: str, mode: str, out_dir: str, play: 
         if rc == 0:
             client.subscribe(topic, qos=1)
             print(f"[sstv] subscribed to {topic} on {broker}:{port}")
+            _publish_status(client, {
+                "event":     "online",
+                "status":    "online",
+                "mode":      mode,
+                "topic":     topic,
+                "out_dir":   out_dir,
+                "t":         int(time.time() * 1000),
+            })
         else:
             print(f"[sstv] connect failed rc={rc}")
 
-    def on_message(_client, _userdata, msg):
+    def on_message(client, _userdata, msg):
         cube = cube_id_from_topic(msg.topic)
         try:
-            process_image(msg.payload, mode, out_dir, cube, play)
+            process_image(msg.payload, mode, out_dir, cube, play, status_client=client)
         except Exception as exc:  # noqa: BLE001
             print(f"[sstv] {cube}: encode error: {exc}")
+            _publish_status(client, {
+                "event":   "error",
+                "status":  "error",
+                "cube_id": cube,
+                "mode":    mode,
+                "error":   str(exc),
+                "t":       int(time.time() * 1000),
+            })
 
     client = mqtt.Client(client_id=f"holocube-sstv-{int(time.time())}")
+    # Last Will so the web tab sees "AWAITING BRIDGE" if the script dies.
+    client.will_set(
+        STATUS_TOPIC,
+        json.dumps({"event": "offline", "status": "offline", "t": int(time.time() * 1000)}),
+        qos=0,
+        retain=False,
+    )
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(broker, port, keepalive=60)

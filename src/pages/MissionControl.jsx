@@ -9,6 +9,7 @@ import AprsTelemetry from '@/components/AprsTelemetry';
 import SondehubTelemetry from '@/components/SondehubTelemetry';
 import PicoBalloonTelemetry from '@/components/PicoBalloonTelemetry';
 import RotatorTelemetry from '@/components/RotatorTelemetry';
+import SstvTelemetry from '@/components/SstvTelemetry';
 import { clearObserver } from '@/lib/observer';
 import ChatRoom from '@/components/ChatRoom';
 import { useNavigate } from 'react-router-dom';
@@ -81,13 +82,11 @@ export default function MissionControl({ observer, onSignOut }) {
           ))}
         </section>
 
-        {activeFeed === 'aprs'
-          ? <AprsTelemetry />
-          : activeFeed === 'sondehub'
-            ? <SondehubTelemetry />
-            : activeFeed === 'pico'
-              ? <PicoBalloonTelemetry />
-              : <RotatorTelemetry />}
+        {activeFeed === 'aprs' && <AprsTelemetry />}
+        {activeFeed === 'sondehub' && <SondehubTelemetry />}
+        {activeFeed === 'pico' && <PicoBalloonTelemetry />}
+        {activeFeed === 'rotator' && <RotatorTelemetry />}
+        {activeFeed === 'sstv' && <SstvTelemetry />}
 
         <section className="w-full">
           <div className="min-w-0 w-full">

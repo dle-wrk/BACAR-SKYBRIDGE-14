@@ -36,3 +36,6 @@ base44/.app.jsonc
 
 # Arduino build output (per-sketch)
 firmware/**/build/
+
+# Python bytecode
+__pycache__/

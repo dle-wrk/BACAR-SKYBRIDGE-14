@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Wifi, Loader2, Check, Radio } from 'lucide-react';
+import { X, Wifi, Loader2, Check } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 import { MQTT_TOPICS } from '@/lib/mqttService';
 import { Button } from '@/components/ui/button';
@@ -15,13 +15,6 @@ export default function ConnectionSettings({ open, onClose }) {
     setConnecting(true);
     telemetry.connect(url);
     setTimeout(() => { setConnecting(false); onClose(); }, 600);
-  };
-
-  const useSimulation = () => {
-    setUrl('');
-    telemetry.setBrokerUrl('');
-    telemetry.connect('');
-    onClose();
   };
 
   return (
@@ -61,10 +54,6 @@ export default function ConnectionSettings({ open, onClose }) {
           <Button onClick={connect} disabled={connecting} className="flex-1">
             {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             <span className="ml-2">Connect</span>
-          </Button>
-          <Button variant="secondary" onClick={useSimulation} className="flex-1">
-            <Radio className="w-4 h-4" />
-            <span className="ml-2">Use Simulation</span>
           </Button>
         </div>
       </div>

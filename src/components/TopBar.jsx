@@ -4,7 +4,7 @@ import { observerDisplayName } from '@/lib/observer';
 import { Radio, Settings, LogOut, Wifi, Activity } from 'lucide-react';
 
 export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed, onFeedChange }) {
-  const [mode, setMode] = useState(telemetry.isSim() ? 'sim' : telemetry.isLive() ? 'live' : 'idle');
+  const [mode, setMode] = useState(telemetry.isLive() ? 'live' : 'idle');
   const [cubeCount, setCubeCount] = useState(0);
   const [active, setActive] = useState(0);
   const ref = useRef(false);
@@ -13,14 +13,14 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
     const unsub = telemetry.subscribe((cubes) => {
       setCubeCount(cubes.length);
       setActive(cubes.filter((c) => c.telemetry).length);
-      setMode(telemetry.isSim() ? 'sim' : telemetry.isLive() ? 'live' : 'idle');
+      setMode(telemetry.isLive() ? 'live' : 'idle');
     });
     if (!ref.current) { telemetry.connect(); ref.current = true; }
     return unsub;
   }, []);
 
-  const statusLabel = mode === 'live' ? 'LIVE MQTT' : mode === 'sim' ? 'SIMULATION' : 'OFFLINE';
-  const statusColor = mode === 'live' ? 'text-emerald-300' : mode === 'sim' ? 'text-amber-300' : 'text-muted-foreground';
+  const statusLabel = mode === 'live' ? 'LIVE MQTT' : 'OFFLINE';
+  const statusColor = mode === 'live' ? 'text-emerald-300' : 'text-muted-foreground';
 
   return (
     <header className="sticky top-0 z-30 strat-card border-b border-border/60">
@@ -48,9 +48,7 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
           <div className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono font-semibold ${
             mode === 'live'
               ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-              : mode === 'sim'
-                ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
-                : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
+              : 'border-muted-foreground/20 bg-muted/20 text-muted-foreground'
           }`}>
             <Wifi className={`w-3.5 h-3.5 ${statusColor}`} />
             <span className={statusColor}>{statusLabel}</span>
@@ -87,6 +85,7 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
           { id: 'sondehub', label: 'SondeHub' },
           { id: 'pico', label: 'Pico Balloon' },
           { id: 'rotator', label: 'Rotator' },
+          { id: 'sstv', label: 'SSTV' },
         ].map((tab) => (
           <button
             key={tab.id}

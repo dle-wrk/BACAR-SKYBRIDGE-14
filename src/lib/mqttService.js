@@ -13,9 +13,12 @@ export const MQTT_TOPICS = {
   sondehubTelemetry: 'sondehub/telemetry',
   picoTelemetry: 'pico/telemetry',
   rotatorTelemetry: 'rotator/telemetry',
+  sstvStatus: 'sstv/status',
   chat: 'lumina/chat',
   attendees: 'lumina/attendees',
 };
+
+const SSTV_HISTORY_MAX = 20;
 
 const CUBE_CONFIGS = [
   {
@@ -194,6 +197,10 @@ class TelemetryService {
     this.sondehubTelemetry = null;
     this.picoTelemetry = null;
     this.rotatorTelemetry = null;
+    /** @type {any} */
+    this.sstvStatus = null;
+    /** @type {Array<any>} */
+    this.sstvHistory = [];
     /** @type {Set<Function>} */
     this.listeners = new Set();
     /** @type {Set<Function>} */
@@ -335,6 +342,14 @@ class TelemetryService {
     return this.rotatorTelemetry;
   }
 
+  getSstvStatus() {
+    return this.sstvStatus;
+  }
+
+  getSstvHistory() {
+    return this.sstvHistory;
+  }
+
   /**
    * @param {Function} listener
    * @returns {() => void}
@@ -435,7 +450,11 @@ class TelemetryService {
     const url = this.brokerUrl;
     this.disconnect();
     if (!url) {
-      this._startSim();
+      // No broker URL configured. Sit idle rather than fabricating data —
+      // simulation is intentionally NOT a fallback for a missing/offline
+      // broker so operators aren't misled into thinking they have telemetry.
+      this.mode = 'idle';
+      this._emit();
       return;
     }
     this.mode = 'mqtt';
@@ -459,7 +478,8 @@ class TelemetryService {
         MQTT_TOPICS.aprsTelemetry,
         MQTT_TOPICS.sondehubTelemetry,
         MQTT_TOPICS.picoTelemetry,
-        MQTT_TOPICS.rotatorTelemetry
+        MQTT_TOPICS.rotatorTelemetry,
+        MQTT_TOPICS.sstvStatus
       );
       this.client.subscribe(topics, (err) => {
         if (err) {
@@ -501,6 +521,24 @@ class TelemetryService {
           this._emit();
         } catch {
           /* ignore malformed rotator payloads */
+        }
+        return;
+      }
+      if (topic === MQTT_TOPICS.sstvStatus) {
+        try {
+          const status = JSON.parse(payload.toString());
+          if (status && typeof status === 'object') {
+            const stamped = { ...status, t: status.t || Date.now() };
+            this.sstvStatus = stamped;
+            // Keep a rolling window of recent bridge events so the SSTV
+            // tab can show what's been transmitted lately.
+            if (stamped.event === 'encoded' || stamped.status === 'encoded') {
+              this.sstvHistory = [stamped, ...this.sstvHistory].slice(0, SSTV_HISTORY_MAX);
+            }
+            this._emit();
+          }
+        } catch {
+          /* ignore malformed SSTV bridge payloads */
         }
         return;
       }
