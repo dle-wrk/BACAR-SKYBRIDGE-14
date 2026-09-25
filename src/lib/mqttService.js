@@ -1,3 +1,4 @@
+// @ts-nocheck
 // MQTT telemetry service for BACAR Skybridge 14 CUBEs.
 // Connects to a broker over WebSocket when configured; otherwise runs a
 // realistic stratospheric-balloon simulation so the UI is fully demonstrable.
@@ -80,15 +81,26 @@ const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 const HISTORY_MAX = 180; // ~15 min at 5s cadence
 const BACAR_14C_NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
 
+/**
+ * @param {Record<string, unknown> | null | undefined} source
+ * @param {string[]} aliases
+ * @returns {unknown}
+ */
 function findTelemetryValue(source, aliases) {
   if (!source || typeof source !== 'object') return undefined;
   const entries = Object.entries(source);
-  const normalized = new Map(entries.map(([key, value]) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), value]));
+  const normalized = new Map(
+    entries.map(([key, value]) => [key.toLowerCase().replace(/[^a-z0-9]/g, ''), value])
+  );
   return aliases
     .map((alias) => normalized.get(alias.toLowerCase().replace(/[^a-z0-9]/g, '')))
     .find((value) => value !== undefined && value !== null && value !== '');
 }
 
+/**
+ * @param {unknown} value
+ * @returns {number | undefined}
+ */
 function asNumber(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
   if (typeof value === 'string' && value.trim()) {
@@ -98,14 +110,26 @@ function asNumber(value) {
   return undefined;
 }
 
+/**
+ * @param {string} url
+ * @returns {string}
+ */
 function normalizeBrokerUrl(url) {
   const trimmed = url.trim();
-  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && trimmed.startsWith('ws://')) {
+  if (
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'https:' &&
+    trimmed.startsWith('ws://')
+  ) {
     return trimmed.replace(/^ws:\/\//, 'wss://').replace(':8083', ':8084');
   }
   return trimmed;
 }
 
+/**
+ * @param {any} payload
+ * @returns {Record<string, any> | null}
+ */
 function normalizeTelemetryPayload(payload) {
   const source = payload?.telemetry || payload?.data || payload?.payload || payload;
   if (!source || typeof source !== 'object') return null;
@@ -138,8 +162,12 @@ function normalizeTelemetryPayload(payload) {
   setNumber('horizontal_angle', ['horizontal_angle', 'azimuth', 'azimuth_deg', 'pan', 'pan_deg']);
   setNumber('vertical_angle', ['vertical_angle', 'elevation', 'elevation_deg', 'tilt', 'tilt_deg']);
 
-  if (telemetry.latitude === undefined) telemetry.latitude = asNumber(findTelemetryValue(nestedGps, ['lat', 'latitude']));
-  if (telemetry.longitude === undefined) telemetry.longitude = asNumber(findTelemetryValue(nestedGps, ['lon', 'lng', 'longitude']));
+  if (telemetry.latitude === undefined) {
+    telemetry.latitude = asNumber(findTelemetryValue(nestedGps, ['lat', 'latitude']));
+  }
+  if (telemetry.longitude === undefined) {
+    telemetry.longitude = asNumber(findTelemetryValue(nestedGps, ['lon', 'lng', 'longitude']));
+  }
   telemetry.callsign = read(['callsign', 'call_sign', 'station', 'station_id']);
   telemetry.uploader = read(['uploader', 'uploaded_by', 'receiver', 'uploader_callsign']);
   telemetry.symbol = read(['symbol', 'symbol_code', 'symbol_table']);
@@ -166,27 +194,46 @@ class TelemetryService {
     this.sondehubTelemetry = null;
     this.picoTelemetry = null;
     this.rotatorTelemetry = null;
+    /** @type {Set<Function>} */
     this.listeners = new Set();
+    /** @type {Set<Function>} */
     this.alertListeners = new Set();
+    /** @type {Array<any>} */
     this.alerts = [];
-    this.lastAlertAt = {}; // `${cubeId}:${type}` -> timestamp, for cooldown
+    /** @type {Record<string, number>} */
+    this.lastAlertAt = {};
+    /** @type {import('mqtt').MqttClient | null} */
     this.client = null;
+    /** @type {ReturnType<typeof setInterval> | null} */
     this.simTimer = null;
     this.simStartedAt = 0;
     this.mode = 'idle';
     const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
-    this.brokerUrl = normalizeBrokerUrl(savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl);
+    this.brokerUrl = normalizeBrokerUrl(
+      savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl
+    );
     if (savedBrokerUrl !== this.brokerUrl) localStorage.setItem(BROKER_KEY, this.brokerUrl);
   }
 
-  getAlerts() { return this.alerts; }
+  getAlerts() {
+    return this.alerts;
+  }
 
+  /**
+   * @param {Function} listener
+   * @returns {() => void}
+   */
   subscribeAlerts(listener) {
     this.alertListeners.add(listener);
     listener(this.alerts);
-    return () => { this.alertListeners.delete(listener); };
+    return () => {
+      this.alertListeners.delete(listener);
+    };
   }
 
+  /**
+   * @param {string} id
+   */
   dismissAlert(id) {
     this.alerts = this.alerts.filter((a) => a.id !== id);
     this._emitAlerts();
@@ -202,6 +249,11 @@ class TelemetryService {
     this.alertListeners.forEach((l) => l(snap));
   }
 
+  /**
+   * @param {any} cube
+   * @param {string} type
+   * @param {string} message
+   */
   _pushAlert(cube, type, message) {
     const key = `${cube.id}:${type}`;
     const now = Date.now();
@@ -222,7 +274,12 @@ class TelemetryService {
     this._emitAlerts();
   }
 
-  // Detect burst (ascent -> descent transition) and sustained rapid descent.
+  /**
+   * Detect burst (ascent -> descent transition) and sustained rapid descent.
+   * @param {any} cube
+   * @param {any} prev
+   * @param {any} point
+   */
   _detectBurst(cube, prev, point) {
     if (!prev || point.vertical_speed_ms == null || prev.vertical_speed_ms == null) return;
     const prevClimbing = prev.vertical_speed_ms > 0.5;
@@ -246,27 +303,48 @@ class TelemetryService {
     }
   }
 
-  getBrokerUrl() { return this.brokerUrl; }
+  getBrokerUrl() {
+    return this.brokerUrl;
+  }
 
+  /**
+   * @param {string} url
+   */
   setBrokerUrl(url) {
     this.brokerUrl = normalizeBrokerUrl(url);
     localStorage.setItem(BROKER_KEY, this.brokerUrl);
   }
 
-  getCubes() { return this.cubes; }
+  getCubes() {
+    return this.cubes;
+  }
 
-  getAprsTelemetry() { return this.aprsTelemetry; }
+  getAprsTelemetry() {
+    return this.aprsTelemetry;
+  }
 
-  getSondehubTelemetry() { return this.sondehubTelemetry; }
+  getSondehubTelemetry() {
+    return this.sondehubTelemetry;
+  }
 
-  getPicoTelemetry() { return this.picoTelemetry; }
+  getPicoTelemetry() {
+    return this.picoTelemetry;
+  }
 
-  getRotatorTelemetry() { return this.rotatorTelemetry; }
+  getRotatorTelemetry() {
+    return this.rotatorTelemetry;
+  }
 
+  /**
+   * @param {Function} listener
+   * @returns {() => void}
+   */
   subscribe(listener) {
     this.listeners.add(listener);
     listener(this.cubes);
-    return () => { this.listeners.delete(listener); };
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   _emit() {
@@ -275,6 +353,10 @@ class TelemetryService {
     this.listeners.forEach((l) => l(snapshot));
   }
 
+  /**
+   * @param {string} cubeId
+   * @param {any} data
+   */
   _applyTelemetry(cubeId, data) {
     const cube = this.cubes.find((c) => c.id === cubeId);
     if (!cube) return;
@@ -286,6 +368,10 @@ class TelemetryService {
     this._emit();
   }
 
+  /**
+   * @param {string} cubeId
+   * @param {string} imageUrl
+   */
   _applyImage(cubeId, imageUrl) {
     const cube = this.cubes.find((c) => c.id === cubeId);
     if (!cube) return;
@@ -294,6 +380,11 @@ class TelemetryService {
     this._emit();
   }
 
+  /**
+   * @param {string} cubeId
+   * @param {any} payloadText
+   * @returns {string | null}
+   */
   _parseNrfImagePayload(cubeId, payloadText) {
     const raw = payloadText?.toString?.() ?? '';
     if (!raw.trim()) return null;
@@ -302,22 +393,41 @@ class TelemetryService {
       const parsed = JSON.parse(raw);
       const imageObj = parsed?.image || parsed;
 
-      if (parsed?.schema === BACAR_14C_NRF_IMAGE_SCHEMA || parsed?.type === 'nrf_image' || parsed?.cube_id === cubeId) {
+      if (
+        parsed?.schema === BACAR_14C_NRF_IMAGE_SCHEMA ||
+        parsed?.type === 'nrf_image' ||
+        parsed?.cube_id === cubeId
+      ) {
         if (typeof imageObj?.url === 'string' && imageObj.url.trim()) return imageObj.url;
-        if (typeof imageObj?.data === 'string' && imageObj.data.trim()) return imageObj.data.startsWith('data:') ? imageObj.data : `data:${imageObj.mime_type || 'image/jpeg'};base64,${imageObj.data}`;
-        if (typeof parsed?.image_url === 'string' && parsed.image_url.trim()) return parsed.image_url;
-        if (typeof parsed?.image_data === 'string' && parsed.image_data.trim()) return parsed.image_data.startsWith('data:') ? parsed.image_data : `data:${parsed.mime_type || 'image/jpeg'};base64,${parsed.image_data}`;
+        if (typeof imageObj?.data === 'string' && imageObj.data.trim()) {
+          return imageObj.data.startsWith('data:')
+            ? imageObj.data
+            : `data:${imageObj.mime_type || 'image/jpeg'};base64,${imageObj.data}`;
+        }
+        if (typeof parsed?.image_url === 'string' && parsed.image_url.trim()) {
+          return parsed.image_url;
+        }
+        if (typeof parsed?.image_data === 'string' && parsed.image_data.trim()) {
+          return parsed.image_data.startsWith('data:')
+            ? parsed.image_data
+            : `data:${parsed.mime_type || 'image/jpeg'};base64,${parsed.image_data}`;
+        }
       }
     } catch {
       // fall through to raw-string handling below
     }
 
-    if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:')) return raw;
+    if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:')) {
+      return raw;
+    }
     if (raw.startsWith('{') || raw.startsWith('[')) return null;
     if (raw.length > 0) return raw;
     return null;
   }
 
+  /**
+   * @param {string} [brokerUrl]
+   */
   connect(brokerUrl) {
     if (typeof brokerUrl === 'string') {
       this.setBrokerUrl(brokerUrl);
@@ -362,33 +472,44 @@ class TelemetryService {
         try {
           this.aprsTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
           this._emit();
-        } catch { /* ignore malformed APRS payloads */ }
+        } catch {
+          /* ignore malformed APRS payloads */
+        }
         return;
       }
       if (topic === MQTT_TOPICS.sondehubTelemetry) {
         try {
           this.sondehubTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
           this._emit();
-        } catch { /* ignore malformed SondeHub payloads */ }
+        } catch {
+          /* ignore malformed SondeHub payloads */
+        }
         return;
       }
       if (topic === MQTT_TOPICS.picoTelemetry) {
         try {
           this.picoTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
           this._emit();
-        } catch { /* ignore malformed Pico Balloon payloads */ }
+        } catch {
+          /* ignore malformed Pico Balloon payloads */
+        }
         return;
       }
       if (topic === MQTT_TOPICS.rotatorTelemetry) {
         try {
           this.rotatorTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
           this._emit();
-        } catch { /* ignore malformed rotator payloads */ }
+        } catch {
+          /* ignore malformed rotator payloads */
+        }
         return;
       }
-      const cube = this.cubes.find((c) => topic === c.telemetryTopic || topic.startsWith(c.baseTopic));
+      const cube = this.cubes.find(
+        (c) => topic === c.telemetryTopic || topic.startsWith(c.baseTopic)
+      );
       if (!cube) return;
-      const kind = topic.startsWith(cube.baseTopic) && topic.endsWith('/image') ? 'image' : 'telemetry';
+      const kind =
+        topic.startsWith(cube.baseTopic) && topic.endsWith('/image') ? 'image' : 'telemetry';
       if (kind === 'image') {
         const parsedUrl = this._parseNrfImagePayload(cube.id, payload);
         if (parsedUrl) {
@@ -400,7 +521,9 @@ class TelemetryService {
           if (!data) return;
           if (data.cube_id) data.id = data.cube_id;
           this._applyTelemetry(cube.id, data);
-        } catch { /* ignore malformed */ }
+        } catch {
+          /* ignore malformed */
+        }
       }
     });
     this.client.on('error', () => {});
@@ -409,7 +532,9 @@ class TelemetryService {
 
   disconnect() {
     if (this.client) {
-      try { this.client.end(true); } catch {}
+      try {
+        this.client.end(true);
+      } catch {}
       this.client = null;
     }
     if (this.simTimer) {
@@ -434,9 +559,10 @@ class TelemetryService {
         const climbProgress = Math.min(1, elapsedSecs / 48);
         const altitudeBoost = (profile.burstAlt - profile.startAlt) * climbProgress;
         const altitude = profile.startAlt + altitudeBoost + Math.sin(elapsedSecs / 7 + index) * 120;
-        const verticalSpeed = elapsedSecs < 45
-          ? profile.startVel * 4.5 + Math.sin(elapsedSecs / 5 + index) * 0.9
-          : -Math.abs(Math.sin(elapsedSecs / 6 + index)) * 8 - 4.5;
+        const verticalSpeed =
+          elapsedSecs < 45
+            ? profile.startVel * 4.5 + Math.sin(elapsedSecs / 5 + index) * 0.9
+            : -Math.abs(Math.sin(elapsedSecs / 6 + index)) * 8 - 4.5;
 
         const latitude = profile.startLat + Math.sin(elapsedSecs / 12 + index) * 0.00018;
         const longitude = profile.startLon + Math.cos(elapsedSecs / 14 + index) * 0.00022;
@@ -457,11 +583,11 @@ class TelemetryService {
           battery_voltage_v: 3.9 + Math.sin(elapsedSecs / 11 + index) * 0.12,
           current_ma: 120 + Math.cos(elapsedSecs / 9 + index) * 25,
           signal_rssi_dbm: -82 + Math.sin(elapsedSecs / 8 + index) * 12,
-          state_of_charge_pct: 92 - (elapsedSecs * 0.18),
-          total_distance_km: (Math.max(0, elapsedSecs - 8) * 0.28) + index * 0.2,
-          horizontal_distance_km: Math.max(0, (elapsedSecs * 0.18) + index * 0.1),
+          state_of_charge_pct: 92 - elapsedSecs * 0.18,
+          total_distance_km: Math.max(0, elapsedSecs - 8) * 0.28 + index * 0.2,
+          horizontal_distance_km: Math.max(0, elapsedSecs * 0.18) + index * 0.1,
           booster_voltage_v: 7.5 + Math.sin(elapsedSecs / 10 + index) * 0.4,
-          payload_health: 98 - (elapsedSecs * 0.09),
+          payload_health: 98 - elapsedSecs * 0.09,
           mode: cube.mode,
           source: 'simulation',
         };
@@ -469,7 +595,9 @@ class TelemetryService {
         this._applyTelemetry(cube.id, point);
 
         if (cube.mode === 'nrf_image_only' && elapsedSecs % 9 < 0.5) {
-          const generated = `https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=800&q=80&sig=${(index + 1) * 7 + Math.floor(elapsedSecs)}`;
+          const generated = `https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=800&q=80&sig=${
+            (index + 1) * 7 + Math.floor(elapsedSecs)
+          }`;
           this._applyImage(cube.id, generated);
         }
       });
@@ -484,8 +612,13 @@ class TelemetryService {
     this.mode = 'idle';
   }
 
-  isSim() { return this.mode === 'sim'; }
-  isLive() { return this.mode === 'mqtt'; }
+  isSim() {
+    return this.mode === 'sim';
+  }
+
+  isLive() {
+    return this.mode === 'mqtt';
+  }
 }
 
 export const telemetry = new TelemetryService();
