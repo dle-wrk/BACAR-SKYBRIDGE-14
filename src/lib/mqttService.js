@@ -8,7 +8,6 @@ import mqtt from 'mqtt';
 export const MQTT_TOPICS = {
   luminaTelemetry: 'lumina/telemetry',
   aerolinkTelemetry: 'aerolink/telemetry',
-  holocubeTelemetry: 'holocube/telemetry',
   aprsTelemetry: 'aprs/telemetry',
   sondehubTelemetry: 'sondehub/telemetry',
   picoTelemetry: 'pico/telemetry',
@@ -60,29 +59,12 @@ const CUBE_CONFIGS = [
       tempOffset: -1.2,
     },
   },
-  {
-    id: 'BACAR-14C',
-    name: 'Project HoloCube',
-    baseTopic: 'bacar/skybridge14/cubeC',
-    telemetryTopic: MQTT_TOPICS.holocubeTelemetry,
-    mode: 'nrf_image_only',
-    profile: {
-      startAlt: 1637,
-      startVel: 6.1,
-      startLat: -26.484693289862868,
-      startLon: 29.22040967145355,
-      burstAlt: 33800,
-      driftLat: 0.00010,
-      driftLon: 0.00007,
-      tempOffset: 1.4,
-    },
-  },
 ];
 
 const BROKER_KEY = 'bacar_broker_url_v1';
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 const HISTORY_MAX = 180; // ~15 min at 5s cadence
-const BACAR_14C_NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
+const NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
 
 /**
  * @param {Record<string, unknown> | null | undefined} source
@@ -426,7 +408,7 @@ class TelemetryService {
       const imageObj = parsed?.image || parsed;
 
       if (
-        parsed?.schema === BACAR_14C_NRF_IMAGE_SCHEMA ||
+        parsed?.schema === NRF_IMAGE_SCHEMA ||
         parsed?.type === 'nrf_image' ||
         parsed?.cube_id === cubeId
       ) {
@@ -652,13 +634,6 @@ class TelemetryService {
         };
 
         this._applyTelemetry(cube.id, point);
-
-        if (cube.mode === 'nrf_image_only' && elapsedSecs % 9 < 0.5) {
-          const generated = `https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=800&q=80&sig=${
-            (index + 1) * 7 + Math.floor(elapsedSecs)
-          }`;
-          this._applyImage(cube.id, generated);
-        }
       });
     }, 2500);
   }
