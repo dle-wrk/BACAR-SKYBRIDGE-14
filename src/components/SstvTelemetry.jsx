@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock, Globe } from 'lucide-react';
+import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock, Globe, Save, Bug } from 'lucide-react';
 import { useSstvReceiver } from '@/lib/useSstvReceiver';
 import { telemetry } from '@/lib/mqttService';
 
@@ -21,6 +21,7 @@ function timeAgo(t) {
 }
 
 function downloadHref(url, filename) {
+  const ext = filename.split('.').pop().toUpperCase();
   return (
     <a
       href={url}
@@ -28,7 +29,7 @@ function downloadHref(url, filename) {
       className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
     >
       <Download className="h-3 w-3" />
-      {filename.endsWith('.wav') ? 'WAV' : 'PNG'}
+      {ext === 'JPG' ? 'JPEG' : ext}
     </a>
   );
 }
@@ -38,6 +39,25 @@ export default function SstvTelemetry() {
 
   const listening = rx.state === 'listening' || rx.state === 'receiving';
   const receiving = rx.state === 'receiving';
+
+  // Detector debug counters — polled once a second while listening so the
+  // diagnostic strip stays live without spamming re-renders.
+  const [debug, setDebug] = useState(null);
+  useEffect(() => {
+    if (!listening) return undefined;
+    const id = setInterval(() => setDebug(rx.getDebug()), 1000);
+    return () => clearInterval(id);
+  }, [listening, rx.getDebug]);
+
+  // Locally-produced WAVs from the "Save current audio" button live outside
+  // the SSTV-decoded captures list — they're raw audio the operator asked
+  // to keep, not necessarily an SSTV frame.
+  const [savedClips, setSavedClips] = useState([]);
+  const handleSaveCurrent = () => {
+    const clip = rx.saveCurrent();
+    if (!clip) return;
+    setSavedClips((prev) => [{ ...clip, t: Date.now() }, ...prev].slice(0, 10));
+  };
 
   // Subscribe to remote captures — every other viewer that decodes an SSTV
   // frame publishes to sstv/status and lands in the telemetry service's
@@ -136,19 +156,75 @@ export default function SstvTelemetry() {
         )}
 
         {listening && (
-          <div className="flex flex-1 min-w-32 items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Level</span>
-            <div className="h-2 flex-1 min-w-16 overflow-hidden rounded-full bg-secondary/40">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  rx.audioLevel > 0.95 ? 'bg-red-500' : rx.audioLevel > 0.7 ? 'bg-amber-400' : 'bg-emerald-400'
-                }`}
-                style={{ width: `${Math.min(100, Math.round(rx.audioLevel * 100))}%` }}
-              />
+          <>
+            <div className="flex flex-1 min-w-32 items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Level</span>
+              <div className="h-2 flex-1 min-w-16 overflow-hidden rounded-full bg-secondary/40">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    rx.audioLevel > 0.95 ? 'bg-red-500' : rx.audioLevel > 0.7 ? 'bg-amber-400' : 'bg-emerald-400'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.round(rx.audioLevel * 100))}%` }}
+                />
+              </div>
             </div>
-          </div>
+            <button
+              type="button"
+              onClick={handleSaveCurrent}
+              title="Save the last ~60 seconds of raw audio as WAV"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+            >
+              <Save className="h-3.5 w-3.5" />
+              Save current
+            </button>
+          </>
         )}
       </div>
+
+      {listening && debug && (
+        <div className="mb-4 rounded-lg border border-border/40 bg-background/30 px-3 py-2 font-mono text-[10px] text-muted-foreground">
+          <div className="mb-1 flex items-center gap-2 uppercase tracking-wider">
+            <Bug className="h-3 w-3" />
+            Detector
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+            <span>leader hits: <span className="text-foreground">{debug.leader_hits}</span></span>
+            <span>start hits: <span className="text-foreground">{debug.start_hits}</span></span>
+            <span>vis reads: <span className="text-foreground">{debug.vis_reads}</span></span>
+            <span>vis matched: <span className="text-foreground">{debug.vis_matched}</span></span>
+            <span>vis unknown: <span className="text-foreground">{debug.vis_unknown}</span></span>
+            <span>last vis: <span className="text-foreground">{debug.last_vis ?? '—'}</span></span>
+            <span>leader Hz: <span className="text-foreground">{debug.last_leader_freq ?? '—'}</span></span>
+            <span>start Hz: <span className="text-foreground">{debug.last_start_freq ?? '—'}</span></span>
+          </div>
+        </div>
+      )}
+
+      {savedClips.length > 0 && (
+        <div className="mb-4">
+          <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Save className="h-3 w-3" />
+            Manual saves
+          </div>
+          <div className="space-y-1.5">
+            {savedClips.map((c) => (
+              <div key={c.t} className="flex items-center justify-between rounded-md border border-border/50 bg-background/40 px-3 py-1.5 text-xs">
+                <span className="font-mono text-muted-foreground">
+                  {timeAgo(c.t)} · {c.duration_s}s · {(c.bytes / 1024).toFixed(0)} KB
+                </span>
+                <a
+                  href={c.url}
+                  download={`sstv_manual_${c.t}.wav`}
+                  className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+                >
+                  <Download className="h-3 w-3" />
+                  WAV
+                </a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {rx.error && (
         <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
@@ -265,6 +341,7 @@ export default function SstvTelemetry() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     {c.png && downloadHref(c.png, `sstv_${c.mode}_${c.t}.png`)}
+                    {c.jpeg && downloadHref(c.jpeg, `sstv_${c.mode}_${c.t}.jpg`)}
                     {c.wavUrl && downloadHref(c.wavUrl, `sstv_${c.mode}_${c.t}.wav`)}
                   </div>
                 </div>

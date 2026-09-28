@@ -180,6 +180,13 @@ const VIS = {
   BIT_MS:    30,
   MIN_LEADER_MS: 200,
   POST_START_MS: 300, // 10 * 30ms (8 vis + parity + stop)
+  // Tolerances loosened for acoustic capture (speaker -> mic pickup, where
+  // room reverb and mic frequency response smear the tones). VB-CABLE users
+  // land inside the strict window; these numbers add margin for everyone
+  // else. LEADER band 1750-2050, START band 1080-1320, VIS bits still
+  // distinguished by which of 1100/1300 they are closer to.
+  LEADER_TOL_HZ: 150,
+  START_TOL_HZ:  120,
 };
 
 export class VISDetector {
@@ -194,6 +201,19 @@ export class VISDetector {
     this.scanStride = Math.round(sampleRate * 0.015);
     this.lastScanPos = 0;
     this.cooldownUntil = 0;
+
+    // Debug counters — the UI reads these to help operators tell "detector
+    // heard nothing" from "detector heard the leader but rejected the VIS".
+    this.debug = {
+      leader_hits:  0,     // times the leader-tone check matched
+      start_hits:   0,     // times a start-bit candidate followed a leader
+      vis_reads:    0,     // times we read 8 VIS bits
+      vis_unknown:  0,     // VIS byte not in the mode table
+      vis_matched:  0,     // VIS byte matched a known mode
+      last_vis:     null,  // last VIS byte read (raw, no parity mask)
+      last_leader_freq: null,
+      last_start_freq:  null,
+    };
   }
 
   feed(chunk) {
@@ -234,8 +254,13 @@ export class VISDetector {
   _isStartAt(pos) {
     const seg = this.buf.subarray(pos, pos + this.bitN);
     if (seg.length < this.bitN) return false;
-    const f = dominantFreq(seg, this.sr, 1000, 1500);
-    return Math.abs(f - VIS.START_HZ) < 80;
+    const f = dominantFreq(seg, this.sr, 900, 1500);
+    const ok = Math.abs(f - VIS.START_HZ) < VIS.START_TOL_HZ;
+    if (ok) {
+      this.debug.start_hits++;
+      this.debug.last_start_freq = Math.round(f);
+    }
+    return ok;
   }
 
   _isLeaderBefore(pos) {
@@ -243,9 +268,11 @@ export class VISDetector {
       const start = pos - Math.round((this.sr * offsetMs) / 1000);
       if (start < 0) return false;
       const seg = this.buf.subarray(start, start + Math.round(this.sr * 0.06));
-      const f = dominantFreq(seg, this.sr, 1500, 2200);
-      if (Math.abs(f - VIS.LEADER_HZ) > 100) return false;
+      const f = dominantFreq(seg, this.sr, 1400, 2400);
+      if (Math.abs(f - VIS.LEADER_HZ) > VIS.LEADER_TOL_HZ) return false;
+      this.debug.last_leader_freq = Math.round(f);
     }
+    this.debug.leader_hits++;
     return true;
   }
 
@@ -255,11 +282,16 @@ export class VISDetector {
     for (let i = 0; i < 8; i++) {
       const seg = this.buf.subarray(visStart + i * this.bitN, visStart + (i + 1) * this.bitN);
       if (seg.length < this.bitN) return null;
-      const f = dominantFreq(seg, this.sr, 1000, 1400);
+      const f = dominantFreq(seg, this.sr, 950, 1450);
       const bit = Math.abs(f - 1100) < Math.abs(f - 1300) ? 1 : 0;
       vis |= bit << i;
     }
-    return MODES[vis] || MODES[vis & 0x7f] || null;
+    this.debug.vis_reads++;
+    this.debug.last_vis = `0x${vis.toString(16).padStart(2, '0').toUpperCase()}`;
+    const mode = MODES[vis] || MODES[vis & 0x7f] || null;
+    if (mode) this.debug.vis_matched++;
+    else this.debug.vis_unknown++;
+    return mode;
   }
 }
 
@@ -385,6 +417,17 @@ export function rgbaToPngDataUrl({ rgba, width, height }) {
   const img = new ImageData(rgba, width, height);
   ctx.putImageData(img, 0, 0);
   return canvas.toDataURL('image/png');
+}
+
+// Convert an rgba result into a JPEG data URL. Quality 0.92 by default.
+export function rgbaToJpegDataUrl({ rgba, width, height }, quality = 0.92) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const img = new ImageData(rgba, width, height);
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL('image/jpeg', quality);
 }
 
 // Convert captured mono Float32 audio (at any sample rate) to a WAV blob.

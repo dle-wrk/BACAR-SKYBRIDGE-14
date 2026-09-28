@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { VISDetector, DECODERS, MODES, rgbaToPngDataUrl, samplesToWavBlob } from '@/lib/sstv';
+import { VISDetector, DECODERS, MODES, rgbaToPngDataUrl, rgbaToJpegDataUrl, samplesToWavBlob } from '@/lib/sstv';
 import { telemetry } from '@/lib/mqttService';
+
+// Rolling buffer window kept while listening — lets the operator save the
+// last N seconds of audio at any time, even if the VIS detector didn't lock.
+const ROLLING_SECONDS = 60;
 
 // One-stop hook that owns the getUserMedia stream, the AudioContext, and
 // the SSTV state machine. Consumers just call start()/stop() and read state.
@@ -21,6 +25,11 @@ export function useSstvReceiver() {
   const captureBufRef = useRef([]);
   const captureHaveRef = useRef(0);
   const sampleRateRef = useRef(44100);
+  // Rolling buffer of the last N seconds of raw audio — used by saveCurrent()
+  // to grab whatever was heard even if VIS never locked.
+  const rollingBufRef = useRef([]);   // array of Float32Array chunks
+  const rollingHaveRef = useRef(0);   // total samples across chunks
+  const rollingMaxRef = useRef(44100 * ROLLING_SECONDS);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -54,12 +63,14 @@ export function useSstvReceiver() {
     const wavUrl = URL.createObjectURL(wavBlob);
     const t = Date.now();
     let imagePng = null;
+    let imageJpeg = null;
     let imageBytes = 0;
     const decoder = mode.decoder ? DECODERS[mode.decoder] : null;
     if (decoder) {
       try {
         const rgba = decoder(audio, sampleRate);
         imagePng = rgbaToPngDataUrl(rgba);
+        imageJpeg = rgbaToJpegDataUrl(rgba, 0.92);
         imageBytes = Math.round(((imagePng.length - 22) * 3) / 4);
       } catch (exc) {
         console.warn('[sstv] decode error', exc);
@@ -74,6 +85,7 @@ export function useSstvReceiver() {
       wavUrl,
       wavBytes: wavBlob.size,
       png: imagePng,
+      jpeg: imageJpeg,
       imageBytes,
       local: true,
     };
@@ -122,9 +134,22 @@ export function useSstvReceiver() {
       // Refresh device list now that we have permission — labels appear.
       refreshDevices();
 
+      // Reset the rolling buffer state for this session.
+      rollingMaxRef.current = ctx.sampleRate * ROLLING_SECONDS;
+      rollingBufRef.current = [];
+      rollingHaveRef.current = 0;
+
       worklet.port.onmessage = (ev) => {
         const { chunk, peak } = ev.data;
         setAudioLevel(peak);
+
+        // Append to rolling buffer, drop the oldest chunks past ROLLING_SECONDS
+        rollingBufRef.current.push(chunk);
+        rollingHaveRef.current += chunk.length;
+        while (rollingHaveRef.current > rollingMaxRef.current && rollingBufRef.current.length > 1) {
+          const dropped = rollingBufRef.current.shift();
+          rollingHaveRef.current -= dropped.length;
+        }
 
         if (modeRef.current === null) {
           detector.feed(chunk);
@@ -187,6 +212,45 @@ export function useSstvReceiver() {
     return () => stop();
   }, [refreshDevices, stop]);
 
+  // Flatten the rolling buffer to a single Float32Array and return a WAV
+  // blob URL + metadata. Returns null if the buffer is empty (idle).
+  const saveCurrent = useCallback(() => {
+    const chunks = rollingBufRef.current;
+    const total = rollingHaveRef.current;
+    if (total === 0) return null;
+    const audio = new Float32Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      audio.set(c, offset);
+      offset += c.length;
+    }
+    const sampleRate = sampleRateRef.current || 44100;
+    const wavBlob = samplesToWavBlob(audio, sampleRate);
+    return {
+      url:        URL.createObjectURL(wavBlob),
+      bytes:      wavBlob.size,
+      duration_s: Number((audio.length / sampleRate).toFixed(1)),
+    };
+  }, []);
+
+  // Snapshot of the detector's debug counters — the UI reads this to help
+  // diagnose why VIS didn't fire (heard the leader? read a byte? matched a
+  // known mode?).
+  const getDebug = useCallback(() => {
+    const d = detectorRef.current?.debug;
+    if (!d) return null;
+    return {
+      leader_hits: d.leader_hits,
+      start_hits:  d.start_hits,
+      vis_reads:   d.vis_reads,
+      vis_matched: d.vis_matched,
+      vis_unknown: d.vis_unknown,
+      last_vis:    d.last_vis,
+      last_leader_freq: d.last_leader_freq,
+      last_start_freq:  d.last_start_freq,
+    };
+  }, []);
+
   return {
     state,
     error,
@@ -199,5 +263,7 @@ export function useSstvReceiver() {
     start,
     stop,
     refreshDevices,
+    saveCurrent,
+    getDebug,
   };
 }
