@@ -197,6 +197,12 @@ class TelemetryService {
     this.simTimer = null;
     this.simStartedAt = 0;
     this.mode = 'idle';
+    // Last-received-message timestamp (any inbound topic). The UI reads this
+    // to flag the feed as "stale" when nothing has come in for a while —
+    // catches "broker is up / connection is live but no cubes are publishing"
+    // which otherwise looks identical to a healthy feed.
+    this.lastMessageAt = 0;
+    this.messageCount = 0;
     const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
     this.brokerUrl = normalizeBrokerUrl(
       savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl
@@ -330,6 +336,14 @@ class TelemetryService {
 
   getSstvHistory() {
     return this.sstvHistory;
+  }
+
+  getLastMessageAt() {
+    return this.lastMessageAt;
+  }
+
+  getMessageCount() {
+    return this.messageCount;
   }
 
   /**
@@ -487,6 +501,8 @@ class TelemetryService {
       });
     });
     this.client.on('message', (topic, payload) => {
+      this.lastMessageAt = Date.now();
+      this.messageCount++;
       if (topic === MQTT_TOPICS.aprsTelemetry) {
         try {
           this.aprsTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
