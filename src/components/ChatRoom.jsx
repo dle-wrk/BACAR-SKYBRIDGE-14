@@ -312,6 +312,42 @@ export default function ChatRoom({ observer }) {
     };
   }, [observer, currentUserName]);
 
+  // Auto-scroll the message list to the newest entry whenever messages
+  // change, unless the user has deliberately scrolled up to read older
+  // history. We track whether the scroll container is currently near the
+  // bottom; if yes, keep sticking to the bottom as new messages arrive;
+  // if no, leave their scroll position alone.
+  const scrollRef = useRef(null);
+  const stickyRef = useRef(true);
+  const [showJumpBtn, setShowJumpBtn] = useState(false);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < 80;
+    stickyRef.current = nearBottom;
+    setShowJumpBtn(!nearBottom);
+  };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stickyRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowJumpBtn(false);
+    } else {
+      setShowJumpBtn(true);
+    }
+  }, [messages.length, open]);
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickyRef.current = true;
+    setShowJumpBtn(false);
+  };
+
   // Dedup by lower-cased username so the same person on multiple tabs — or
   // picked up twice by the ChatRoom's reader because mqttService ALSO
   // publishes presence on lumina/attendees — collapses to one row.
@@ -449,7 +485,11 @@ export default function ChatRoom({ observer }) {
             </div>
           </div>
 
-          <div className="space-y-2 flex-1 overflow-y-auto pr-1 min-h-0">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="space-y-2 flex-1 overflow-y-auto pr-1 min-h-0 relative"
+          >
             {messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
                 Start the mission chat.
@@ -468,6 +508,16 @@ export default function ChatRoom({ observer }) {
               ))
             )}
           </div>
+
+          {showJumpBtn && (
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              className="absolute bottom-24 right-6 z-10 inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-background/90 px-3 py-1.5 text-xs font-mono shadow-xl shadow-black/40 backdrop-blur transition hover:border-accent hover:text-accent"
+            >
+              ↓ newest
+            </button>
+          )}
 
           {typingUsers.length > 0 && (
             <div className="mt-2 text-[10px] text-muted-foreground">
