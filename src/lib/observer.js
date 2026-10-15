@@ -56,6 +56,30 @@ export function normalizeGrid(grid) {
  * @param {Observer | null | undefined} obs
  * @returns {string}
  */
+/**
+ * Convert a Maidenhead grid locator (4-6 chars) into approximate lat/lon.
+ * Used so ham-radio observers get mapped automatically without needing to
+ * share a browser geolocation.
+ * @param {string} grid
+ * @returns {{ lat: number, lon: number } | null}
+ */
+export function gridToLatLon(grid) {
+  const g = (grid || '').trim().toUpperCase();
+  if (!isValidGrid(g)) return null;
+  const A = 'A'.charCodeAt(0);
+  const Z = '0'.charCodeAt(0);
+  const lon = (g.charCodeAt(0) - A) * 20 - 180 + (g.charCodeAt(2) - Z) * 2;
+  const lat = (g.charCodeAt(1) - A) * 10 - 90 + (g.charCodeAt(3) - Z) * 1;
+  // Add 5' x 2.5' subsquare offset if we have the sixth char pair.
+  if (g.length >= 6) {
+    const lonSub = (g.charCodeAt(4) - A) * (5 / 60);
+    const latSub = (g.charCodeAt(5) - A) * (2.5 / 60);
+    return { lat: lat + latSub + 1.25 / 60, lon: lon + lonSub + 2.5 / 60 };
+  }
+  // Center of the 2° x 1° square.
+  return { lat: lat + 0.5, lon: lon + 1.0 };
+}
+
 export function observerDisplayName(obs) {
   if (!obs) return 'Guest';
 

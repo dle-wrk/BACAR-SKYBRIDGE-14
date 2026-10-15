@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { telemetry } from '@/lib/mqttService';
 import { observerDisplayName } from '@/lib/observer';
-import { Radio, Settings, LogOut, Wifi, Activity } from 'lucide-react';
+import { Radio, Settings, LogOut, Wifi, Activity, Users } from 'lucide-react';
 
 // Freshness thresholds — above STALE_MS the feed is amber; above DEAD_MS red.
 // 30 s matches typical cube telemetry cadence; 60 s means something broke.
@@ -20,6 +20,7 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
   const [cubeCount, setCubeCount] = useState(0);
   const [active, setActive] = useState(0);
   const [lastMsgAt, setLastMsgAt] = useState(telemetry.getLastMessageAt());
+  const [peopleCount, setPeopleCount] = useState(telemetry.getPresence().length);
   const [, setClockTick] = useState(0);
   const ref = useRef(false);
 
@@ -29,6 +30,7 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
       setActive(cubes.filter((c) => c.telemetry).length);
       setMode(telemetry.isLive() ? 'live' : 'idle');
       setLastMsgAt(telemetry.getLastMessageAt());
+      setPeopleCount(telemetry.getPresence().length);
     });
     if (!ref.current) { telemetry.connect(); ref.current = true; }
     // Second ticker so the "Xs ago" counter advances even when no new MQTT
@@ -70,6 +72,14 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
         <div className="flex-1" />
 
         <div className="hidden md:flex items-center gap-3 text-xs">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-background/40 px-2.5 py-1 font-mono"
+            title={`${peopleCount} viewer${peopleCount === 1 ? '' : 's'} online right now (presence broadcast via MQTT)`}
+          >
+            <Users className="w-3.5 h-3.5 text-accent" />
+            <span className="text-muted-foreground">people</span>
+            <span className="font-semibold text-foreground">{peopleCount}</span>
+          </div>
           <div className="flex items-center gap-1.5">
             <Activity className="w-3.5 h-3.5 text-muted-foreground" />
             <span className="text-muted-foreground">CUBEs</span>

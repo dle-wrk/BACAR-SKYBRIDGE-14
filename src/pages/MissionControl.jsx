@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { telemetry } from '@/lib/mqttService';
 import LuminaDetail from '@/components/LuminaDetail';
+import PeoplePanel from '@/components/PeoplePanel';
 import TopBar from '@/components/TopBar';
 import StarfieldBackground from '@/components/StarfieldBackground';
 import ConnectionSettings from '@/components/ConnectionSettings';
@@ -8,7 +9,7 @@ import BurstAlerts from '@/components/BurstAlerts';
 import AprsTelemetry from '@/components/AprsTelemetry';
 import SondehubTelemetry from '@/components/SondehubTelemetry';
 import SstvTelemetry from '@/components/SstvTelemetry';
-import { clearObserver } from '@/lib/observer';
+import { clearObserver, gridToLatLon } from '@/lib/observer';
 import ChatRoom from '@/components/ChatRoom';
 import { Rocket, Satellite } from 'lucide-react';
 
@@ -19,9 +20,19 @@ export default function MissionControl({ observer, onSignOut }) {
 
   useEffect(() => {
     const unsub = telemetry.subscribe(setCubes);
+    // Register this viewer's identity for presence broadcasts.
+    const coords = observer?.grid ? gridToLatLon(observer.grid) : null;
+    telemetry.setObserverIdentity({
+      name:     observer?.name || observer?.username,
+      callsign: observer?.callsign,
+      location: observer?.location || observer?.grid || null,
+      lat:      coords?.lat ?? null,
+      lon:      coords?.lon ?? null,
+      type:     observer?.type || 'guest',
+    });
     telemetry.connect();
     return unsub;
-  }, []);
+  }, [observer]);
 
   const signOut = () => {
     clearObserver();
@@ -76,6 +87,8 @@ export default function MissionControl({ observer, onSignOut }) {
             </div>
           ))}
         </section>
+
+        <PeoplePanel />
 
         {activeFeed === 'aprs' && <AprsTelemetry />}
         {activeFeed === 'sondehub' && <SondehubTelemetry />}

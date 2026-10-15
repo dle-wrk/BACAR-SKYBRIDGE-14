@@ -19,6 +19,15 @@ export const MQTT_TOPICS = {
 
 const SSTV_HISTORY_MAX = 20;
 
+// ---- Presence ----
+const PRESENCE_SESSION_KEY     = 'bacar_presence_session_v1';
+const PRESENCE_HISTORY_KEY     = 'bacar_presence_history_v1';
+const PRESENCE_LAST_BACKUP_KEY = 'bacar_presence_last_backup_v1';
+const PRESENCE_HEARTBEAT_MS    = 15_000;   // publish own presence every 15s
+const PRESENCE_STALE_MS        = 60_000;   // consider a session gone after 60s
+const PRESENCE_HISTORY_DAYS    = 5;        // keep 5 days of join events
+const PRESENCE_BACKUP_INTERVAL = PRESENCE_HISTORY_DAYS * 24 * 3600 * 1000;
+
 const CUBE_CONFIGS = [
   {
     id: 'BACAR-14A',
@@ -205,6 +214,18 @@ class TelemetryService {
     this.messageCount = 0;
     /** @type {ReturnType<typeof setInterval> | null} */
     this.refreshTimer = null;
+
+    // ---- Presence (who's on the dashboard right now) ----
+    // sessionId: unique per browser tab; survives reloads via sessionStorage.
+    this.sessionId = this._loadSessionId();
+    this.observerInfo = null;  // { name, callsign, location, lat, lon, type }
+    /** @type {Map<string, any>} */
+    this.presenceById = new Map(); // sessionId -> { sender, location, lat, lon, lastSeen, joinedAt }
+    /** @type {Array<any>} */
+    this.presenceHistory = this._loadPresenceHistory(); // 5-day rolling log
+    /** @type {ReturnType<typeof setInterval> | null} */
+    this.presenceTimer = null;
+    this.lastBackupAt = Number(localStorage.getItem(PRESENCE_LAST_BACKUP_KEY) || '0');
     const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
     this.brokerUrl = normalizeBrokerUrl(
       savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl
@@ -361,6 +382,167 @@ class TelemetryService {
     return this.messageCount;
   }
 
+  // ============================================================
+  // PRESENCE API
+  // ============================================================
+  _loadSessionId() {
+    try {
+      let id = sessionStorage.getItem(PRESENCE_SESSION_KEY);
+      if (!id) {
+        id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        sessionStorage.setItem(PRESENCE_SESSION_KEY, id);
+      }
+      return id;
+    } catch {
+      return `anon-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }
+
+  _loadPresenceHistory() {
+    try {
+      const raw = localStorage.getItem(PRESENCE_HISTORY_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      // Prune older than PRESENCE_HISTORY_DAYS on load.
+      const cutoff = Date.now() - PRESENCE_HISTORY_DAYS * 24 * 3600 * 1000;
+      return parsed.filter((e) => (e?.t || 0) > cutoff);
+    } catch {
+      return [];
+    }
+  }
+
+  _savePresenceHistory() {
+    try {
+      localStorage.setItem(PRESENCE_HISTORY_KEY, JSON.stringify(this.presenceHistory));
+    } catch { /* storage disabled */ }
+  }
+
+  /**
+   * Register this viewer's identity. Called once from the top-level app
+   * once the observer has identified. Triggers the first presence publish
+   * if the MQTT client is already connected.
+   * @param {{name?: string, callsign?: string, location?: string, lat?: number, lon?: number, type?: string}} info
+   */
+  setObserverIdentity(info) {
+    this.observerInfo = info || null;
+    if (this.client?.connected) this._publishPresence('online');
+  }
+
+  _publishPresence(status) {
+    if (!this.client?.connected) return;
+    const payload = {
+      type:       'presence',
+      status,
+      sender:     this.observerInfo?.callsign || this.observerInfo?.name || 'Guest',
+      session_id: this.sessionId,
+      location:   this.observerInfo?.location || null,
+      lat:        this.observerInfo?.lat ?? null,
+      lon:        this.observerInfo?.lon ?? null,
+      kind:       this.observerInfo?.type || 'guest',
+      t:          Date.now(),
+    };
+    try {
+      this.client.publish(MQTT_TOPICS.attendees, JSON.stringify(payload), { qos: 0 });
+    } catch { /* ignore publish errors */ }
+  }
+
+  _handlePresenceMessage(payload) {
+    try {
+      const msg = JSON.parse(payload.toString());
+      if (!msg || msg.type !== 'presence' || !msg.session_id) return;
+      const key = String(msg.session_id);
+      if (msg.status === 'offline') {
+        this.presenceById.delete(key);
+      } else {
+        const existing = this.presenceById.get(key);
+        this.presenceById.set(key, {
+          sessionId: key,
+          sender:    msg.sender || 'Guest',
+          location:  msg.location || null,
+          lat:       Number.isFinite(msg.lat) ? msg.lat : null,
+          lon:       Number.isFinite(msg.lon) ? msg.lon : null,
+          kind:      msg.kind || 'guest',
+          joinedAt:  existing?.joinedAt || msg.t || Date.now(),
+          lastSeen:  msg.t || Date.now(),
+        });
+        if (!existing) {
+          // New join → record in rolling history.
+          this.presenceHistory.push({
+            t:         msg.t || Date.now(),
+            sessionId: key,
+            sender:    msg.sender || 'Guest',
+            location:  msg.location || null,
+            lat:       Number.isFinite(msg.lat) ? msg.lat : null,
+            lon:       Number.isFinite(msg.lon) ? msg.lon : null,
+            kind:      msg.kind || 'guest',
+          });
+          this._pruneHistory();
+          this._savePresenceHistory();
+          this._maybeAutoBackup();
+        }
+      }
+      this._emit();
+    } catch { /* ignore malformed presence messages */ }
+  }
+
+  _pruneStalePresence() {
+    const cutoff = Date.now() - PRESENCE_STALE_MS;
+    let changed = false;
+    for (const [k, v] of this.presenceById) {
+      if (v.lastSeen < cutoff) {
+        this.presenceById.delete(k);
+        changed = true;
+      }
+    }
+    if (changed) this._emit();
+  }
+
+  _pruneHistory() {
+    const cutoff = Date.now() - PRESENCE_HISTORY_DAYS * 24 * 3600 * 1000;
+    this.presenceHistory = this.presenceHistory.filter((e) => (e?.t || 0) > cutoff);
+  }
+
+  _maybeAutoBackup() {
+    const now = Date.now();
+    if (now - this.lastBackupAt < PRESENCE_BACKUP_INTERVAL) return;
+    if (this.presenceHistory.length === 0) return;
+    this.lastBackupAt = now;
+    try {
+      localStorage.setItem(PRESENCE_LAST_BACKUP_KEY, String(now));
+    } catch { /* ignore */ }
+    this.downloadPresenceBackup(`skybridge14_presence_auto_${new Date(now).toISOString().slice(0, 10)}.json`);
+  }
+
+  /** Returns snapshot array of currently-online users (newest first). */
+  getPresence() {
+    this._pruneStalePresence();
+    return Array.from(this.presenceById.values()).sort((a, b) => b.lastSeen - a.lastSeen);
+  }
+
+  /** Returns the 5-day rolling join log (newest first). */
+  getPresenceHistory() {
+    this._pruneHistory();
+    return [...this.presenceHistory].sort((a, b) => b.t - a.t);
+  }
+
+  /** Trigger a browser download of the presence history as JSON. */
+  downloadPresenceBackup(filename = `skybridge14_presence_${Date.now()}.json`) {
+    if (typeof document === 'undefined') return;
+    const blob = new Blob(
+      [JSON.stringify({ exported_at: new Date().toISOString(), days: PRESENCE_HISTORY_DAYS, entries: this.presenceHistory }, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   /**
    * Broadcast an SSTV capture to every other viewer. Called by the in-browser
    * receiver when it locks on and decodes a frame. Silent no-op when the MQTT
@@ -507,13 +689,21 @@ class TelemetryService {
         MQTT_TOPICS.sondehubTelemetry,
         MQTT_TOPICS.picoTelemetry,
         MQTT_TOPICS.rotatorTelemetry,
-        MQTT_TOPICS.sstvStatus
+        MQTT_TOPICS.sstvStatus,
+        MQTT_TOPICS.attendees,
       );
       this.client.subscribe(topics, (err) => {
         if (err) {
           this.mode = 'idle';
         }
       });
+      // Announce own presence immediately on connect, then start heartbeat.
+      this._publishPresence('online');
+      if (this.presenceTimer) clearInterval(this.presenceTimer);
+      this.presenceTimer = setInterval(() => {
+        this._publishPresence('online');
+        this._pruneStalePresence();
+      }, PRESENCE_HEARTBEAT_MS);
     });
     this.client.on('message', (topic, payload) => {
       this.lastMessageAt = Date.now();
@@ -560,6 +750,10 @@ class TelemetryService {
         } catch {
           /* ignore malformed rotator payloads */
         }
+        return;
+      }
+      if (topic === MQTT_TOPICS.attendees) {
+        this._handlePresenceMessage(payload);
         return;
       }
       if (topic === MQTT_TOPICS.sstvStatus) {
@@ -619,9 +813,17 @@ class TelemetryService {
   disconnect() {
     if (this.client) {
       try {
+        // Announce leave before closing so other viewers' counters drop immediately.
+        this._publishPresence('offline');
+      } catch { /* ignore */ }
+      try {
         this.client.end(true);
       } catch {}
       this.client = null;
+    }
+    if (this.presenceTimer) {
+      clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
     }
     if (this.simTimer) {
       clearInterval(this.simTimer);
