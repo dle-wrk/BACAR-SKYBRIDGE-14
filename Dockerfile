@@ -2,10 +2,7 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
-# --legacy-peer-deps because react-leaflet 5 declares react@^19 as a peer
-# but the app runs on react@18. The runtime API we use (MapContainer,
-# Marker, TileLayer, Polyline, Popup) is identical between the two.
-RUN npm ci --legacy-peer-deps
+RUN npm ci
 
 COPY . .
 RUN npm run build
