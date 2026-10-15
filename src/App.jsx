@@ -7,7 +7,6 @@ import PageNotFound from './lib/PageNotFound';
 import { getObserver } from '@/lib/observer';
 import ScrollToTop from './components/ScrollToTop';
 import MissionControl from './pages/MissionControl';
-import CubeDetail from './pages/CubeDetail';
 import StarfieldBackground from './components/StarfieldBackground';
 import IdentifyGate from './components/IdentifyGate';
 
@@ -40,7 +39,6 @@ const PublicApp = () => {
   return (
     <Routes>
       <Route path="/" element={<MissionControl observer={observer} onSignOut={() => setObserverState(null)} />} />
-      <Route path="/cube/:cubeId" element={<CubeDetail observer={observer} onSignOut={() => setObserverState(null)} />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );

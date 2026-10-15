@@ -122,22 +122,26 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
       </div>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center gap-1 border-t border-border/40" role="tablist" aria-label="Telemetry feeds">
         {[
-          { id: 'aprs', label: 'APRS' },
+          { id: 'aprs',     label: 'APRS' },
           { id: 'sondehub', label: 'SondeHub' },
-          { id: 'pico', label: 'Pico Balloon' },
-          { id: 'rotator', label: 'Rotator' },
-          { id: 'sstv', label: 'SSTV' },
+          { id: 'pico',     label: 'Pico Balloon', disabled: true },
+          { id: 'rotator',  label: 'Rotator',      disabled: true },
+          { id: 'sstv',     label: 'SSTV' },
         ].map((tab) => (
           <button
             key={tab.id}
             type="button"
             role="tab"
             aria-selected={activeFeed === tab.id}
-            onClick={() => onFeedChange(tab.id)}
+            disabled={tab.disabled}
+            onClick={() => !tab.disabled && onFeedChange(tab.id)}
+            title={tab.disabled ? 'Disabled — telemetry source retired' : undefined}
             className={`border-b-2 px-3 py-2 text-xs font-mono uppercase tracking-wider transition ${
-              activeFeed === tab.id
-                ? 'border-accent text-accent'
-                : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
+              tab.disabled
+                ? 'border-transparent text-muted-foreground/40 cursor-not-allowed'
+                : activeFeed === tab.id
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'
             }`}
           >
             {tab.label}

@@ -1,25 +1,21 @@
 import { useEffect, useState } from 'react';
 import { telemetry } from '@/lib/mqttService';
-import CubeCard from '@/components/CubeCard';
+import LuminaDetail from '@/components/LuminaDetail';
 import TopBar from '@/components/TopBar';
 import StarfieldBackground from '@/components/StarfieldBackground';
 import ConnectionSettings from '@/components/ConnectionSettings';
 import BurstAlerts from '@/components/BurstAlerts';
 import AprsTelemetry from '@/components/AprsTelemetry';
 import SondehubTelemetry from '@/components/SondehubTelemetry';
-import PicoBalloonTelemetry from '@/components/PicoBalloonTelemetry';
-import RotatorTelemetry from '@/components/RotatorTelemetry';
 import SstvTelemetry from '@/components/SstvTelemetry';
 import { clearObserver } from '@/lib/observer';
 import ChatRoom from '@/components/ChatRoom';
-import { useNavigate } from 'react-router-dom';
 import { Rocket, Satellite } from 'lucide-react';
 
 export default function MissionControl({ observer, onSignOut }) {
   const [cubes, setCubes] = useState(telemetry.getCubes());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeFeed, setActiveFeed] = useState('aprs');
-  const navigate = useNavigate();
 
   useEffect(() => {
     const unsub = telemetry.subscribe(setCubes);
@@ -64,13 +60,12 @@ export default function MissionControl({ observer, onSignOut }) {
         </section>
 
         {/* stats strip */}
-        <section className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-7">
+        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-7">
           {[
-            { label: 'Active CUBEs', value: cubes.filter((c) => c.telemetry).length, total: cubes.length, icon: Satellite },
-            { label: 'Peak Altitude', value: peakAlt(cubes), unit: 'km' },
-            { label: 'Avg Ascent', value: avgClimb(cubes), unit: 'm/s' },
-            { label: 'Avg Distance', value: avgDistance(cubes), unit: 'km' },
-            { label: 'nRF Images', value: cubes.reduce((a, c) => a + (c.images?.length || 0), 0), unit: 'frames' },
+            { label: 'Active',        value: cubes.filter((c) => c.telemetry).length, unit: '', icon: Satellite },
+            { label: 'Peak Altitude', value: peakAlt(cubes),      unit: 'km' },
+            { label: 'Avg Ascent',    value: avgClimb(cubes),     unit: 'm/s' },
+            { label: 'Distance',      value: avgDistance(cubes),  unit: 'km' },
           ].map((s, i) => (
             <div key={i} className="strat-card rounded-xl p-3.5 border border-border/50">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
@@ -84,22 +79,16 @@ export default function MissionControl({ observer, onSignOut }) {
 
         {activeFeed === 'aprs' && <AprsTelemetry />}
         {activeFeed === 'sondehub' && <SondehubTelemetry />}
-        {activeFeed === 'pico' && <PicoBalloonTelemetry />}
-        {activeFeed === 'rotator' && <RotatorTelemetry />}
         {activeFeed === 'sstv' && <SstvTelemetry />}
 
         <section className="w-full">
-          <div className="min-w-0 w-full">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-heading font-semibold text-lg">Payload CUBEs</h2>
-              <span className="text-xs text-muted-foreground font-mono">tap a cube for full track</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-              {cubes.map((cube) => (
-                <CubeCard key={cube.id} cube={cube} onOpen={(id) => navigate(`/cube/${id}`)} />
-              ))}
-            </div>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-heading text-lg font-semibold">Payload CUBE</h2>
+            <span className="font-mono text-xs text-muted-foreground">BACAR-14A · LuminoStratos</span>
           </div>
+          {cubes.map((cube) => (
+            <LuminaDetail key={cube.id} cube={cube} />
+          ))}
         </section>
       </main>
 

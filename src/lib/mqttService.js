@@ -42,24 +42,13 @@ const CUBE_CONFIGS = [
       tempOffset: 0,
     },
   },
-  {
-    id: 'BACAR-14B',
-    name: 'Project AreoLink',
-    baseTopic: 'bacar/skybridge14/cubeB',
-    telemetryTopic: MQTT_TOPICS.aerolinkTelemetry,
-    mode: 'radio_battery_only',
-    profile: {
-      startAlt: 1637,
-      startVel: 5.2,
-      startLat: -26.484693289862868,
-      startLon: 29.22040967145355,
-      burstAlt: 34850,
-      driftLat: 0.00011,
-      driftLon: 0.00008,
-      tempOffset: -1.2,
-    },
-  },
 ];
+
+// Hardcoded APRS/SondeHub callsigns we always render a card for, in order.
+// Any extra "zr6ljk-*" variant arriving on the feed also gets a card
+// appended at the end — see trackCallsignTelemetry() for the match rule.
+export const CALLSIGN_PREFIX = 'zr6ljk';
+export const CALLSIGN_CARDS  = ['zr6ljk', 'zr6ljk-9', 'zr6ljk-20'];
 
 const BROKER_KEY = 'bacar_broker_url_v1';
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
@@ -175,8 +164,16 @@ class TelemetryService {
       history: [],
       images: [],
     }));
+    // Legacy single-latest slots (preserved for anything still reading them).
     this.aprsTelemetry = null;
     this.sondehubTelemetry = null;
+    // Per-callsign maps keyed by lowercase callsign — the dashboard renders
+    // one card per callsign for feeds that carry traffic from multiple
+    // stations.
+    /** @type {Map<string, any>} */
+    this.aprsByCallsign = new Map();
+    /** @type {Map<string, any>} */
+    this.sondehubByCallsign = new Map();
     this.picoTelemetry = null;
     this.rotatorTelemetry = null;
     /** @type {any} */
@@ -203,6 +200,8 @@ class TelemetryService {
     // which otherwise looks identical to a healthy feed.
     this.lastMessageAt = 0;
     this.messageCount = 0;
+    /** @type {ReturnType<typeof setInterval> | null} */
+    this.refreshTimer = null;
     const savedBrokerUrl = localStorage.getItem(BROKER_KEY);
     this.brokerUrl = normalizeBrokerUrl(
       savedBrokerUrl === null ? DEFAULT_BROKER_URL : savedBrokerUrl
@@ -320,6 +319,19 @@ class TelemetryService {
 
   getSondehubTelemetry() {
     return this.sondehubTelemetry;
+  }
+
+  /** Snapshot of the per-callsign map as a plain object keyed by lowercase callsign. */
+  getAprsByCallsign() {
+    const out = {};
+    for (const [k, v] of this.aprsByCallsign) out[k] = v;
+    return out;
+  }
+
+  getSondehubByCallsign() {
+    const out = {};
+    for (const [k, v] of this.sondehubByCallsign) out[k] = v;
+    return out;
   }
 
   getPicoTelemetry() {
@@ -505,7 +517,11 @@ class TelemetryService {
       this.messageCount++;
       if (topic === MQTT_TOPICS.aprsTelemetry) {
         try {
-          this.aprsTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          const t = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this.aprsTelemetry = t;
+          if (t?.callsign) {
+            this.aprsByCallsign.set(String(t.callsign).toLowerCase(), t);
+          }
           this._emit();
         } catch {
           /* ignore malformed APRS payloads */
@@ -514,7 +530,11 @@ class TelemetryService {
       }
       if (topic === MQTT_TOPICS.sondehubTelemetry) {
         try {
-          this.sondehubTelemetry = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          const t = normalizeTelemetryPayload(JSON.parse(payload.toString()));
+          this.sondehubTelemetry = t;
+          if (t?.callsign) {
+            this.sondehubByCallsign.set(String(t.callsign).toLowerCase(), t);
+          }
           this._emit();
         } catch {
           /* ignore malformed SondeHub payloads */
@@ -584,6 +604,12 @@ class TelemetryService {
       }
     });
     this.client.on('error', () => {});
+
+    // Public 5-second refresh — every connected viewer re-emits even when no
+    // new MQTT message arrived. Keeps "updated Xs ago" counters consistent
+    // across devices and refreshes any time-based derivations in the UI.
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = setInterval(() => this._emit(), 5000);
     this.client.on('offline', () => {});
   }
 
@@ -597,6 +623,10 @@ class TelemetryService {
     if (this.simTimer) {
       clearInterval(this.simTimer);
       this.simTimer = null;
+    }
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
     }
     this.mode = 'idle';
   }
