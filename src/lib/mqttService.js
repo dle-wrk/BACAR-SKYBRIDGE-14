@@ -48,7 +48,10 @@ const CUBE_CONFIGS = [
 // Any extra "zr6ljk-*" variant arriving on the feed also gets a card
 // appended at the end — see trackCallsignTelemetry() for the match rule.
 export const CALLSIGN_PREFIX = 'zr6ljk';
-export const CALLSIGN_CARDS  = ['zr6ljk', 'zr6ljk-9', 'zr6ljk-20'];
+export const CALLSIGN_CARDS  = ['zr6ljk', 'zr6ljk-6'];
+// User-added callsigns live in localStorage so each viewer's picks persist
+// across reloads but aren't shared with other viewers (no server-side list).
+export const USER_CALLSIGNS_KEY = 'bacar_user_callsigns_v1';
 
 const BROKER_KEY = 'bacar_broker_url_v1';
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';

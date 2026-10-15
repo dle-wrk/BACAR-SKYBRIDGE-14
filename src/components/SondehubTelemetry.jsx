@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MapPin, Satellite } from 'lucide-react';
+import { ExternalLink, MapPin, Plus, Satellite, Search, X } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 import { CALLSIGN_CARDS, CALLSIGN_PREFIX } from '@/lib/mqttService';
+import { useUserCallsigns } from '@/lib/useUserCallsigns';
+
+const SONDEHUB_LINK   = 'https://amateur.sondehub.org/';
+const SONDEHUB_CALL   = (cs) => `https://amateur.sondehub.org/?focus=${encodeURIComponent(cs.toUpperCase())}`;
 
 function Field({ label, value, unit = '' }) {
   return (
@@ -15,22 +19,43 @@ function Field({ label, value, unit = '' }) {
   );
 }
 
-function CallsignCard({ callsign, data }) {
+function CallsignCard({ callsign, data, onRemove }) {
   const fresh = data && (Date.now() - (data.t || 0)) < 60_000;
   return (
     <div className="rounded-2xl border border-border/60 bg-background/40 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Satellite className="h-3.5 w-3.5 text-accent" />
-          <span className="font-mono text-sm font-semibold uppercase tracking-wider">{callsign}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <Satellite className="h-3.5 w-3.5 shrink-0 text-accent" />
+          <a
+            href={SONDEHUB_CALL(callsign)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ${callsign.toUpperCase()} on amateur.sondehub.org`}
+            className="truncate font-mono text-sm font-semibold uppercase tracking-wider hover:text-accent transition"
+          >
+            {callsign}
+          </a>
+          <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
         </div>
-        <span className={`rounded-full border px-2 py-0.5 text-[9px] font-mono uppercase ${
-          fresh
-            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-            : 'border-border/60 text-muted-foreground'
-        }`}>
-          {fresh ? 'live' : 'awaiting'}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={`rounded-full border px-2 py-0.5 text-[9px] font-mono uppercase ${
+            fresh
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-border/60 text-muted-foreground'
+          }`}>
+            {fresh ? 'live' : 'awaiting'}
+          </span>
+          {onRemove && (
+            <button
+              type="button"
+              onClick={() => onRemove(callsign)}
+              title="Remove this callsign from your list"
+              className="rounded-md p-0.5 text-muted-foreground transition hover:bg-secondary hover:text-red-300"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
       {!data ? (
         <div className="py-3 text-center text-xs text-muted-foreground">No frames yet</div>
@@ -56,18 +81,45 @@ export default function SondehubTelemetry() {
   useEffect(() => telemetry.subscribe(() => setTick((t) => t + 1)), []);
 
   const byCallsign = telemetry.getSondehubByCallsign();
+  const userCs = useUserCallsigns();
 
-  const callsignList = useMemo(() => {
-    const list = [...CALLSIGN_CARDS];
+  const { pinned, userList, extras } = useMemo(() => {
+    const pinnedSet = new Set(CALLSIGN_CARDS);
+    const userSet = new Set(userCs.list.filter((c) => !pinnedSet.has(c)));
+    const extraList = [];
     for (const cs of Object.keys(byCallsign)) {
-      if (!list.includes(cs) && cs.startsWith(`${CALLSIGN_PREFIX}-`)) list.push(cs);
+      if (pinnedSet.has(cs) || userSet.has(cs)) continue;
+      if (cs.startsWith(`${CALLSIGN_PREFIX}-`)) extraList.push(cs);
     }
-    return list;
-  }, [byCallsign]);
+    return {
+      pinned:   CALLSIGN_CARDS,
+      userList: Array.from(userSet),
+      extras:   extraList,
+    };
+  }, [byCallsign, userCs.list]);
 
-  const anyFresh = callsignList.some(
+  const total = pinned.length + userList.length + extras.length;
+  const anyFresh = [...pinned, ...userList, ...extras].some(
     (cs) => byCallsign[cs] && (Date.now() - (byCallsign[cs].t || 0)) < 60_000,
   );
+
+  const [newCs, setNewCs] = useState('');
+  const [search, setSearch] = useState('');
+
+  const handleAdd = (e) => {
+    e.preventDefault();
+    const cs = newCs.trim();
+    if (!cs) return;
+    userCs.add(cs);
+    setNewCs('');
+  };
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    const q = search.trim();
+    if (!q) window.open(SONDEHUB_LINK, '_blank', 'noopener');
+    else window.open(SONDEHUB_CALL(q), '_blank', 'noopener');
+  };
 
   return (
     <section className="strat-card rounded-2xl border border-border/60 p-4 sm:p-5 mb-7">
@@ -79,7 +131,7 @@ export default function SondehubTelemetry() {
           <div>
             <h2 className="font-heading font-semibold">SondeHub Telemetry</h2>
             <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
-              sondehub.org feed · tracking {callsignList.length} {CALLSIGN_PREFIX.toUpperCase()}-* callsigns
+              sondehub.org feed · tracking {total} callsign{total === 1 ? '' : 's'}
             </div>
           </div>
         </div>
@@ -92,15 +144,69 @@ export default function SondehubTelemetry() {
         </span>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <form onSubmit={handleAdd} className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={newCs}
+            onChange={(e) => setNewCs(e.target.value)}
+            placeholder="Add callsign (e.g. ZS6ABC)"
+            maxLength={10}
+            className="rounded-lg border border-border/60 bg-background/60 px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40"
+          />
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-secondary/60 px-2.5 py-1.5 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </button>
+        </form>
+        <form onSubmit={handleSearch} className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search SondeHub"
+            maxLength={10}
+            className="rounded-lg border border-border/60 bg-background/60 px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40"
+          />
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-secondary/60 px-2.5 py-1.5 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+            title="Opens SondeHub in a new tab for the entered callsign."
+          >
+            <Search className="h-3.5 w-3.5" />
+            Open on SondeHub
+          </button>
+        </form>
+        <a
+          href={SONDEHUB_LINK}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-background/40 px-2.5 py-1.5 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent ml-auto"
+        >
+          sondehub.org
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {callsignList.map((cs) => (
+        {pinned.map((cs) => (
+          <CallsignCard key={cs} callsign={cs} data={byCallsign[cs]} />
+        ))}
+        {userList.map((cs) => (
+          <CallsignCard key={cs} callsign={cs} data={byCallsign[cs]} onRemove={userCs.remove} />
+        ))}
+        {extras.map((cs) => (
           <CallsignCard key={cs} callsign={cs} data={byCallsign[cs]} />
         ))}
       </div>
 
       <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
         <MapPin className="h-3.5 w-3.5 shrink-0" />
-        Showing cards for {CALLSIGN_CARDS.join(', ').toUpperCase()} plus any other {CALLSIGN_PREFIX.toUpperCase()}-* callsign on the feed
+        Showing pinned cards for {CALLSIGN_CARDS.join(', ').toUpperCase()} plus any extra callsigns you add
+        and any other {CALLSIGN_PREFIX.toUpperCase()}-* callsign on the feed. User additions persist on this device.
       </div>
     </section>
   );
