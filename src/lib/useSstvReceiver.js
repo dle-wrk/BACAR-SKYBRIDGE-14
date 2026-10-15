@@ -30,6 +30,11 @@ export function useSstvReceiver() {
   const rollingBufRef = useRef([]);   // array of Float32Array chunks
   const rollingHaveRef = useRef(0);   // total samples across chunks
   const rollingMaxRef = useRef(44100 * ROLLING_SECONDS);
+  // Live preview — a data-URL of the partial decode updated every ~500 ms
+  // while RECEIVING. Lets the viewer watch the image fill in line-by-line.
+  const [livePreview, setLivePreview] = useState(null);
+  const lastPreviewAtRef = useRef(0);
+  const previewBusyRef = useRef(false);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -56,6 +61,9 @@ export function useSstvReceiver() {
     setState('idle');
     setDetected(null);
     setAudioLevel(0);
+    setLivePreview(null);
+    lastPreviewAtRef.current = 0;
+    previewBusyRef.current = false;
   }, []);
 
   const handleCapture = useCallback((mode, audio, sampleRate) => {
@@ -171,6 +179,42 @@ export function useSstvReceiver() {
         } else {
           captureBufRef.current.push(chunk);
           captureHaveRef.current += chunk.length;
+
+          // Live progressive preview: every ~500 ms, flatten whatever we have
+          // and run the mode's decoder on it. The decoder already pads short
+          // audio with zeros, so partial calls yield partial images (the
+          // remaining lines come back as black and fill in on the next tick).
+          const mode = modeRef.current;
+          const decoder = mode?.decoder ? DECODERS[mode.decoder] : null;
+          const now = performance.now();
+          if (
+            decoder &&
+            !previewBusyRef.current &&
+            now - lastPreviewAtRef.current > 500 &&
+            captureHaveRef.current > ctx.sampleRate * 0.5 // have at least 0.5s
+          ) {
+            lastPreviewAtRef.current = now;
+            previewBusyRef.current = true;
+            // Build a snapshot without starving the audio thread for long.
+            Promise.resolve().then(() => {
+              try {
+                const total = captureHaveRef.current;
+                const partial = new Float32Array(total);
+                let off = 0;
+                for (const c of captureBufRef.current) {
+                  partial.set(c, off);
+                  off += c.length;
+                }
+                const rgba = decoder(partial, ctx.sampleRate);
+                setLivePreview(rgbaToPngDataUrl(rgba));
+              } catch (exc) {
+                console.warn('[sstv] live preview decode failed', exc);
+              } finally {
+                previewBusyRef.current = false;
+              }
+            });
+          }
+
           if (captureHaveRef.current >= targetSamplesRef.current) {
             const total = captureHaveRef.current;
             const audio = new Float32Array(total);
@@ -179,13 +223,14 @@ export function useSstvReceiver() {
               audio.set(c, offset);
               offset += c.length;
             }
-            const mode = modeRef.current;
+            const finishedMode = modeRef.current;
             modeRef.current = null;
             captureBufRef.current = [];
             captureHaveRef.current = 0;
             setDetected(null);
             setState('listening');
-            handleCapture(mode, audio, ctx.sampleRate);
+            setLivePreview(null);
+            handleCapture(finishedMode, audio, ctx.sampleRate);
           }
         }
       };
@@ -336,5 +381,6 @@ export function useSstvReceiver() {
     saveCurrent,
     getDebug,
     decodeFile,
+    livePreview,
   };
 }

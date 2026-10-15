@@ -321,22 +321,36 @@ export default function SstvTelemetry() {
       )}
 
       {receiving && rx.detected && (
-        <div className="mb-3 flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
-          <Zap className="h-4 w-4 shrink-0 animate-pulse" />
-          <div className="min-w-0 flex-1">
-            <div className="text-xs font-mono uppercase tracking-wider">Now receiving</div>
-            <div className="mt-0.5 font-semibold">
-              {rx.detected.mode.label}
-              {rx.detected.mode.vis && (
-                <span className="ml-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono">
-                  VIS {rx.detected.mode.vis}
-                </span>
-              )}
+        <div className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
+          <div className="flex items-center gap-3">
+            <Zap className="h-4 w-4 shrink-0 animate-pulse" />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-mono uppercase tracking-wider">Now receiving</div>
+              <div className="mt-0.5 font-semibold">
+                {rx.detected.mode.label}
+                {rx.detected.mode.vis && (
+                  <span className="ml-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono">
+                    VIS {rx.detected.mode.vis}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="text-right text-xs font-mono text-amber-200/80">
+              {rx.detected.mode.seconds}s frame
             </div>
           </div>
-          <div className="text-right text-xs font-mono text-amber-200/80">
-            {rx.detected.mode.seconds}s frame
-          </div>
+          {rx.livePreview && (
+            <div className="mt-3 flex flex-col items-start gap-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-amber-200/80">
+                Live decode · updating every ~500 ms
+              </div>
+              <img
+                src={rx.livePreview}
+                alt="SSTV frame decoding live"
+                className="max-h-72 rounded-lg border border-amber-500/40 bg-black"
+              />
+            </div>
+          )}
         </div>
       )}
 
