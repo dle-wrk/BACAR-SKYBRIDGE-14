@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Users, Download, Globe, Clock } from 'lucide-react';
+import { Users, Download, Globe, Clock, Trash2 } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 
 // Reuse the Leaflet default-icon fix from LuminaDetail (shared across the app).
@@ -39,6 +39,10 @@ export default function PeoplePanel() {
   const handleBackup = () => {
     telemetry.downloadPresenceBackup();
   };
+  const handleClear = () => {
+    if (!window.confirm('Clear the Who\'s Watching history? Online now stays; only the 5-day rolling log is wiped.')) return;
+    telemetry.clearPresenceHistory();
+  };
 
   return (
     <section className="strat-card rounded-2xl border border-border/60 p-4 sm:p-5 mb-7">
@@ -66,6 +70,15 @@ export default function PeoplePanel() {
           >
             <Download className="h-3.5 w-3.5" />
             Backup
+          </button>
+          <button
+            type="button"
+            onClick={handleClear}
+            title="Wipe the 5-day rolling log on this device. Online now is unaffected."
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-background/60 px-2.5 py-1.5 text-xs font-mono uppercase text-muted-foreground transition hover:border-red-500/60 hover:text-red-300"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Clear
           </button>
         </div>
       </div>

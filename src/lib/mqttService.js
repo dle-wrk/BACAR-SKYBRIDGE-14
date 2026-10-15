@@ -21,8 +21,11 @@ const SSTV_HISTORY_MAX = 20;
 
 // ---- Presence ----
 const PRESENCE_SESSION_KEY     = 'bacar_presence_session_v1';
-const PRESENCE_HISTORY_KEY     = 'bacar_presence_history_v1';
-const PRESENCE_LAST_BACKUP_KEY = 'bacar_presence_last_backup_v1';
+// v2 bumps the key so the "Who's Watching" rolling log drops its stale
+// entries on the next load. The user had made a backup and wanted a
+// clean board; existing localStorage data under v1 is ignored.
+const PRESENCE_HISTORY_KEY     = 'bacar_presence_history_v2';
+const PRESENCE_LAST_BACKUP_KEY = 'bacar_presence_last_backup_v2';
 const PRESENCE_HEARTBEAT_MS    = 15_000;   // publish own presence every 15s
 const PRESENCE_STALE_MS        = 60_000;   // consider a session gone after 60s
 const PRESENCE_HISTORY_DAYS    = 5;        // keep 5 days of join events
@@ -577,6 +580,22 @@ class TelemetryService {
   getPresenceHistory() {
     this._pruneHistory();
     return [...this.presenceHistory].sort((a, b) => b.t - a.t);
+  }
+
+  /**
+   * Wipe the Who's Watching rolling history (both memory + localStorage)
+   * and reset the auto-backup timer. Does not touch currently-online
+   * presence (presenceById); those sessions remain until their own
+   * lastSeen goes stale.
+   */
+  clearPresenceHistory() {
+    this.presenceHistory = [];
+    try {
+      localStorage.removeItem(PRESENCE_HISTORY_KEY);
+      localStorage.setItem(PRESENCE_LAST_BACKUP_KEY, String(Date.now()));
+      this.lastBackupAt = Date.now();
+    } catch { /* ignore */ }
+    this._emit();
   }
 
   /** Trigger a browser download of the presence history as JSON. */
