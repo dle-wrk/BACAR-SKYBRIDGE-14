@@ -358,6 +358,27 @@ class TelemetryService {
     return out;
   }
 
+  /**
+   * Merge a batch of SondeHub frames (from the public amateur API) into
+   * the by-callsign map. Only replaces when the new frame is newer than
+   * what we already have, so the live MQTT path and the HTTP poll path
+   * can coexist without flipping backward.
+   * @param {Record<string, any>} entries  Keyed by lowercase callsign.
+   */
+  mergeSondehubFrames(entries) {
+    if (!entries || typeof entries !== 'object') return;
+    let changed = false;
+    for (const [cs, frame] of Object.entries(entries)) {
+      if (!frame) continue;
+      const existing = this.sondehubByCallsign.get(cs);
+      if (existing && (frame.t || 0) <= (existing.t || 0)) continue;
+      this.sondehubByCallsign.set(cs, frame);
+      this.sondehubTelemetry = frame;
+      changed = true;
+    }
+    if (changed) this._emit();
+  }
+
   getPicoTelemetry() {
     return this.picoTelemetry;
   }

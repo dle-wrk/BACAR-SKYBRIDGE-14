@@ -3,6 +3,9 @@ import { ExternalLink, MapPin, Plus, Satellite, Search, X } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 import { CALLSIGN_CARDS, CALLSIGN_PREFIX } from '@/lib/mqttService';
 import { useUserCallsigns } from '@/lib/useUserCallsigns';
+import { fetchLatestForCallsigns } from '@/lib/sondehubApi';
+
+const POLL_INTERVAL_MS = 30_000; // SondeHub updates every ~15-30 s per callsign
 
 const SONDEHUB_LINK   = 'https://amateur.sondehub.org/';
 const SONDEHUB_CALL   = (cs) => `https://amateur.sondehub.org/?focus=${encodeURIComponent(cs.toUpperCase())}`;
@@ -78,6 +81,9 @@ function CallsignCard({ callsign, data, onRemove }) {
 
 export default function SondehubTelemetry() {
   const [, setTick] = useState(0);
+  const [polling, setPolling] = useState(false);
+  const [pollError, setPollError] = useState(null);
+  const [lastPollAt, setLastPollAt] = useState(0);
   useEffect(() => telemetry.subscribe(() => setTick((t) => t + 1)), []);
 
   const byCallsign = telemetry.getSondehubByCallsign();
@@ -97,6 +103,35 @@ export default function SondehubTelemetry() {
       extras:   extraList,
     };
   }, [byCallsign, userCs.list]);
+
+  // Poll the public SondeHub Amateur API for every tracked callsign.
+  // CORS-enabled, no key needed — same endpoint the official tracker at
+  // amateur.sondehub.org (projecthorus/sondehub-amateur-tracker, MIT) uses.
+  const tracked = useMemo(
+    () => [...pinned, ...userList, ...extras],
+    [pinned, userList, extras],
+  );
+  useEffect(() => {
+    if (tracked.length === 0) return undefined;
+    let cancelled = false;
+    const pull = async () => {
+      setPolling(true);
+      setPollError(null);
+      try {
+        const batch = await fetchLatestForCallsigns(tracked, { durationHours: 2 });
+        if (cancelled) return;
+        telemetry.mergeSondehubFrames(batch);
+        setLastPollAt(Date.now());
+      } catch (exc) {
+        if (!cancelled) setPollError(exc?.message || String(exc));
+      } finally {
+        if (!cancelled) setPolling(false);
+      }
+    };
+    pull();
+    const id = setInterval(pull, POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [tracked.join(',')]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const total = pinned.length + userList.length + extras.length;
   const anyFresh = [...pinned, ...userList, ...extras].some(
@@ -203,10 +238,26 @@ export default function SondehubTelemetry() {
         ))}
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
-        <MapPin className="h-3.5 w-3.5 shrink-0" />
-        Showing pinned cards for {CALLSIGN_CARDS.join(', ').toUpperCase()} plus any extra callsigns you add
-        and any other {CALLSIGN_PREFIX.toUpperCase()}-* callsign on the feed. User additions persist on this device.
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <MapPin className="h-3.5 w-3.5 shrink-0" />
+          Pinned {CALLSIGN_CARDS.join(', ').toUpperCase()} + your additions + any {CALLSIGN_PREFIX.toUpperCase()}-* on the feed.
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <ExternalLink className="h-3 w-3" />
+          <a
+            href="https://github.com/projecthorus/sondehub-amateur-tracker"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline-offset-2 hover:underline hover:text-accent"
+          >
+            Live telemetry via api.v2.sondehub.org
+          </a>
+          {polling ? ' · polling…'
+            : pollError ? ` · poll error: ${pollError}`
+            : lastPollAt ? ` · last pull ${Math.max(0, Math.round((Date.now() - lastPollAt) / 1000))}s ago`
+            : ' · poll idle'}
+        </span>
       </div>
     </section>
   );
