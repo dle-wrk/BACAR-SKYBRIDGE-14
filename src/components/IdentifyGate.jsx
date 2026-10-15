@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Radio, MapPin, ArrowRight, Check, Crosshair, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Radio, MapPin, ArrowRight, Check, Crosshair, Loader2, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,6 +10,59 @@ import { isValidGrid, normalizeGrid, setObserver } from '@/lib/observer';
 // 2° × 1° square (covering several towns), so for a mission map we
 // require the full 6-char form.
 const GRID_RE_FULL = /^[A-R]{2}[0-9]{2}[A-X]{2}$/;
+
+// Mission launch: Sat 17 Oct 2026 08:00 SAST (UTC+2) → 06:00 UTC.
+const LAUNCH_AT = Date.UTC(2026, 9, 17, 6, 0, 0);  // month index 9 = October
+
+function formatCountdown(ms) {
+  if (ms <= 0) return { d: 0, h: 0, m: 0, s: 0, done: true };
+  const totalSecs = Math.floor(ms / 1000);
+  return {
+    d: Math.floor(totalSecs / 86400),
+    h: Math.floor((totalSecs % 86400) / 3600),
+    m: Math.floor((totalSecs % 3600) / 60),
+    s: totalSecs % 60,
+    done: false,
+  };
+}
+
+function Countdown() {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const { d, h, m, s, done } = formatCountdown(LAUNCH_AT - now);
+  return (
+    <div className="mt-4 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Rocket className="h-4 w-4 text-accent" />
+          <div className="leading-tight">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+              {done ? 'Launch window reached' : 'Launch in'}
+            </div>
+            <div className="text-xs text-foreground">
+              Sat 17 Oct 2026 · 08:00 SAST
+            </div>
+          </div>
+        </div>
+        {!done ? (
+          <div className="flex items-center gap-2 font-mono text-sm font-bold text-accent">
+            <span>{String(d).padStart(2, '0')}<span className="text-[10px] font-normal text-muted-foreground ml-0.5">d</span></span>
+            <span>{String(h).padStart(2, '0')}<span className="text-[10px] font-normal text-muted-foreground ml-0.5">h</span></span>
+            <span>{String(m).padStart(2, '0')}<span className="text-[10px] font-normal text-muted-foreground ml-0.5">m</span></span>
+            <span>{String(s).padStart(2, '0')}<span className="text-[10px] font-normal text-muted-foreground ml-0.5">s</span></span>
+          </div>
+        ) : (
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-mono uppercase text-emerald-300">
+            GO
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function IdentifyGate({ onIdentified }) {
   const [mode, setMode] = useState('ham');
@@ -114,6 +167,8 @@ export default function IdentifyGate({ onIdentified }) {
         <p className="text-muted-foreground mt-2 text-sm">
           Identify yourself to join the live telemetry feed. No password needed — this is a public mission channel.
         </p>
+
+        <Countdown />
 
         <div className="grid grid-cols-2 gap-2 mt-6 p-1 bg-secondary/50 rounded-xl">
           <button
