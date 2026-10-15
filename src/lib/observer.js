@@ -1,7 +1,10 @@
 // @ts-nocheck
 // Observer identity (no password) — stored locally. Public access.
 
-const KEY = 'bacar_observer_v1';
+// v2 bumps the storage key to force every existing viewer back to the
+// IdentifyGate — previous saves (v1) lacked GPS lat/lon on observer
+// records and the gate now insists on real coordinates for both roles.
+const KEY = 'bacar_observer_v2';
 
 /**
  * @typedef {Object} Observer

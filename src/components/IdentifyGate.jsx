@@ -80,14 +80,20 @@ export default function IdentifyGate({ onIdentified }) {
     } else {
       const n = name.trim();
       if (n.length < 2) return setError('Please enter a name.');
-      const loc = location.trim();
-      if (loc.length < 2) return setError('Please enter a location (or tap "Use my location").');
+      // Location is mandatory for observers — tap "Use my location" and
+      // grant the browser permission. Without real coordinates we can't
+      // plot the viewer on the Who's Watching map, which is the whole
+      // reason the field exists.
+      if (!coords || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lon)) {
+        return setError('Location is required — tap "Use my location" and allow the browser prompt.');
+      }
+      const loc = location.trim() || `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
       const obs = {
         type: 'observer',
         name: n,
         location: loc,
-        lat: coords?.lat ?? null,
-        lon: coords?.lon ?? null,
+        lat: coords.lat,
+        lon: coords.lon,
         joined: Date.now(),
       };
       setObserver(obs);
@@ -178,28 +184,36 @@ export default function IdentifyGate({ onIdentified }) {
               </div>
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <Label htmlFor="loc">Location</Label>
+                  <Label htmlFor="loc">Location <span className="text-destructive">*</span></Label>
                   <button
                     type="button"
                     onClick={requestGeo}
                     disabled={geoBusy}
-                    className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-secondary/60 px-2 py-1 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent disabled:opacity-60"
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-mono uppercase transition disabled:opacity-60 ${
+                      coords
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                        : 'border-accent/40 bg-accent/10 text-accent'
+                    }`}
                   >
                     {geoBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Crosshair className="h-3 w-3" />}
-                    {geoBusy ? 'Locating…' : 'Use my location'}
+                    {geoBusy ? 'Locating…' : coords ? 'Location captured' : 'Use my location'}
                   </button>
                 </div>
                 <Input
                   id="loc"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. Bloemfontein, ZA"
+                  placeholder="(auto-filled from GPS; required)"
                   className="mt-1.5"
                   maxLength={80}
                 />
-                {coords && (
-                  <p className="mt-1.5 text-[11px] font-mono text-muted-foreground">
+                {coords ? (
+                  <p className="mt-1.5 text-[11px] font-mono text-emerald-300">
                     GPS fix: {coords.lat.toFixed(4)}, {coords.lon.toFixed(4)} — will plot on the Who&apos;s Watching map.
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    Required: tap <strong>Use my location</strong> and allow the browser prompt. We won&apos;t let you in without a map pin.
                   </p>
                 )}
               </div>
