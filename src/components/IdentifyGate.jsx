@@ -135,6 +135,9 @@ export default function IdentifyGate({ onIdentified }) {
             <MapPin className="w-4 h-4" /> Observer
           </button>
         </div>
+        <p className="mt-2 text-[11px] text-muted-foreground text-center">
+          Don&apos;t have a callsign? Pick <strong className="text-foreground">Observer</strong> — no amateur-radio licence needed.
+        </p>
 
         <form onSubmit={submit} className="space-y-4 mt-5">
           {mode === 'ham' ? (
