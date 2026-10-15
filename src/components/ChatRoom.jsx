@@ -7,8 +7,9 @@ import { MQTT_TOPICS, telemetry } from '@/lib/mqttService';
 const ROOM_KEY = 'bacar_mission_chat_room_v1';
 const CHANNEL_NAME = 'bacar_chat_channel_v1';
 const MQTT_CHAT_TOPIC = MQTT_TOPICS.chat;
-const MQTT_PRESENCE_TOPIC = MQTT_TOPICS.attendees;
-const PRESENCE_TTL_MS = 60_000;
+// Presence is owned entirely by mqttService (telemetry.getPresence()) — this
+// component used to publish its own presence messages which caused duplicate
+// rows (same person, two sessionIds). Removed.
 const MAX_MESSAGES = 80;
 
 function getSessionId() {
@@ -52,10 +53,13 @@ function readRoom() {
 
 function writeRoom(nextRoom) {
   const normalized = normalizeRoom(nextRoom);
+  // Chat room storage now only tracks messages — users come from
+  // telemetry.getPresence(). We still write an empty users array for forwards
+  // compatibility with readers that haven't been updated.
   localStorage.setItem(
     ROOM_KEY,
     JSON.stringify({
-      users: normalized.users.slice(-100),
+      users: [],
       messages: normalized.messages.slice(-MAX_MESSAGES),
     })
   );
@@ -130,36 +134,26 @@ export default function ChatRoom({ observer }) {
   const currentUserName = observer ? observerDisplayName(observer) : 'Guest';
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(false);
-  const [users, setUsers] = useState(() => readRoom().users);
   const [messages, setMessages] = useState(() => readRoom().messages);
   const [typingUsers, setTypingUsers] = useState([]);
   const [mqttConnected, setMqttConnected] = useState(false);
+  const [, forceRerender] = useState(0);
   const mqttClientRef = useRef(null);
   const typingTimerRef = useRef(null);
+
+  // Trigger a re-render whenever the single-source presence changes so the
+  // signed-in-users list reflects joins / leaves live.
+  useEffect(() => telemetry.subscribe(() => forceRerender((n) => n + 1)), []);
 
   useEffect(() => {
     if (!observer) return undefined;
 
     const sessionId = getSessionId();
-    const currentRoom = readRoom();
-    const nextEntry = {
-      sessionId,
-      key: getUserKey(observer, sessionId),
-      username: currentUserName,
-      type: observer?.type || 'guest',
-      lastSeen: Date.now(),
-    };
 
     const refreshFromStorage = () => {
       const room = readRoom();
-      setUsers(room.users);
       setMessages(room.messages);
     };
-
-    const localUsers = mergeUsers(currentRoom.users, nextEntry);
-    writeRoom({ ...currentRoom, users: localUsers });
-    setUsers(localUsers);
-    emitRoomEvent('presence', { users: localUsers });
 
     const brokerUrl = telemetry.getBrokerUrl()?.trim();
     let mqttClient = null;
@@ -172,31 +166,13 @@ export default function ChatRoom({ observer }) {
         reconnectPeriod: 4000,
         connectTimeout: 8000,
         clean: true,
-        will: {
-          topic: MQTT_PRESENCE_TOPIC,
-          payload: JSON.stringify({
-            type: 'presence',
-            sender: currentUserName,
-            status: 'offline',
-            session_id: sessionId,
-          }),
-          qos: 1,
-          retain: false,
-        },
       });
       mqttClientRef.current = mqttClient;
 
       mqttClient.on('connect', () => {
+        // Chat-only subscription. Presence is handled by mqttService.
         mqttClient.subscribe(MQTT_CHAT_TOPIC, { qos: 1 }, () => { });
-        mqttClient.subscribe(MQTT_PRESENCE_TOPIC, { qos: 1 }, () => { });
         setMqttConnected(true);
-        mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
-          type: 'presence',
-          sender: currentUserName,
-          status: 'online',
-          session_id: sessionId,
-          user_type: observer?.type || 'guest',
-        }), { qos: 1 });
       });
 
       mqttClient.on('close', () => setMqttConnected(false));
@@ -206,20 +182,6 @@ export default function ChatRoom({ observer }) {
         const raw = payload.toString();
         try {
           const message = JSON.parse(raw);
-
-          if (topic === MQTT_PRESENCE_TOPIC && message?.type === 'presence') {
-            const room = readRoom();
-            const peer = normalizePresence(message);
-            if (!peer) return;
-            const merged = peer.status === 'offline'
-              ? room.users.filter((user) => user.sessionId !== peer.sessionId)
-              : mergeUsers(room.users, { ...peer, key: getUserKey(peer, peer.sessionId) });
-            const nextRoom = { ...room, users: merged };
-            writeRoom(nextRoom);
-            setUsers(merged);
-            emitRoomEvent('presence', { users: merged });
-            return;
-          }
 
           if (topic === MQTT_CHAT_TOPIC && (message?.type === 'message' || message?.type === 'chat-message')) {
             const normalized = normalizeChatMessage(message);
@@ -257,16 +219,6 @@ export default function ChatRoom({ observer }) {
         }
       });
 
-      presenceTimer = window.setInterval(() => {
-        if (mqttClient && mqttClient.connected) {
-          mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
-            type: 'presence',
-            sender: currentUserName,
-            status: 'online',
-            session_id: sessionId,
-          }), { qos: 1 });
-        }
-      }, 15_000);
     }
 
     if (channel) {
@@ -293,22 +245,9 @@ export default function ChatRoom({ observer }) {
       window.removeEventListener('bacar-chat-room-sync', refreshFromStorage);
 
       if (mqttClient) {
-        if (mqttClient.connected) {
-          mqttClient.publish(MQTT_PRESENCE_TOPIC, JSON.stringify({
-            type: 'presence',
-            sender: currentUserName,
-            status: 'offline',
-            session_id: sessionId,
-          }), { qos: 1 });
-        }
         try { mqttClient.end(true); } catch { /* ignore */ }
       }
 
-      const remainingRoom = readRoom();
-      const remainingUsers = remainingRoom.users.filter((user) => user.sessionId !== sessionId);
-      writeRoom({ ...remainingRoom, users: remainingUsers });
-      setUsers(remainingUsers);
-      emitRoomEvent('presence', { users: remainingUsers });
     };
   }, [observer, currentUserName]);
 
@@ -348,18 +287,22 @@ export default function ChatRoom({ observer }) {
     setShowJumpBtn(false);
   };
 
-  // Dedup by lower-cased username so the same person on multiple tabs — or
-  // picked up twice by the ChatRoom's reader because mqttService ALSO
-  // publishes presence on lumina/attendees — collapses to one row.
+  // Signed-in users list reads directly from the single-source presence
+  // in mqttService (telemetry.getPresence()). ChatRoom no longer maintains
+  // its own list — that was the source of the duplicate "Dylan" rows.
+  const presenceList = telemetry.getPresence();
   const visibleUsers = useMemo(() => {
     const byName = new Map();
-    for (const u of users) {
-      const key = (u.username || 'guest').toLowerCase();
+    for (const p of presenceList) {
+      const key = (p.sender || 'guest').toLowerCase();
       const existing = byName.get(key);
-      if (!existing || (u.lastSeen || 0) > (existing.lastSeen || 0)) byName.set(key, u);
+      if (!existing || (p.lastSeen || 0) > (existing.lastSeen || 0)) {
+        byName.set(key, { username: p.sender, type: p.kind, location: p.location, lastSeen: p.lastSeen });
+      }
     }
     return Array.from(byName.values()).sort((a, b) => (a.username || '').localeCompare(b.username || ''));
-  }, [users]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(presenceList.map((p) => [p.sender, p.location, p.lastSeen]))]);
 
   const handleSend = (event) => {
     event.preventDefault();
