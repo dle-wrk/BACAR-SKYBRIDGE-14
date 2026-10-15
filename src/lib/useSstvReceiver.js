@@ -233,6 +233,76 @@ export function useSstvReceiver() {
     };
   }, []);
 
+  // Decode a WAV File straight through the detector + decoders, bypassing
+  // the microphone entirely. Returns a diagnostic report the UI shows to
+  // the operator. Great for sanity-checking the decoder against a known
+  // clean file when live mic capture is misbehaving.
+  const decodeFile = useCallback(async (file) => {
+    const arrayBuf = await file.arrayBuffer();
+    // Use a one-shot offline context just to decode the WAV. If the file's
+    // sample rate differs from our pipeline's 44100, decodeAudioData will
+    // resample for us.
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+    try {
+      const audioBuf = await ctx.decodeAudioData(arrayBuf);
+      // Mix down to mono (SSTV is mono).
+      const length = audioBuf.length;
+      const mono = new Float32Array(length);
+      for (let ch = 0; ch < audioBuf.numberOfChannels; ch++) {
+        const data = audioBuf.getChannelData(ch);
+        for (let i = 0; i < length; i++) mono[i] += data[i];
+      }
+      if (audioBuf.numberOfChannels > 1) {
+        for (let i = 0; i < length; i++) mono[i] /= audioBuf.numberOfChannels;
+      }
+      const sampleRate = audioBuf.sampleRate;
+
+      // Run the entire file through a fresh VIS detector.
+      const detector = new (await import('@/lib/sstv')).VISDetector(sampleRate);
+      // Feed in ~2k-sample chunks so the detector's rolling buffer and
+      // cooldown behave the same as live capture.
+      const chunkSize = 2048;
+      let hit = null;
+      let hitAt = 0;
+      for (let i = 0; i < mono.length; i += chunkSize) {
+        const chunk = mono.subarray(i, Math.min(i + chunkSize, mono.length));
+        detector.feed(chunk);
+        const found = detector.scan();
+        if (found) {
+          hit = found;
+          hitAt = i;
+          break;
+        }
+      }
+      const report = {
+        file_name:   file.name,
+        file_bytes:  file.size,
+        duration_s:  Number((mono.length / sampleRate).toFixed(1)),
+        sample_rate: sampleRate,
+        debug:       detector.debug,
+      };
+      if (!hit) {
+        report.result = 'no_vis';
+        report.message = 'VIS header not detected in the file.';
+        return report;
+      }
+      report.result = 'detected';
+      report.mode = hit.mode.key;
+      report.mode_label = hit.mode.label;
+      // The audio from the detector buffer at hit.headerEnd onwards is the
+      // picture data — reconstruct from the mono buffer using the global
+      // sample offset.
+      const absHeaderEnd = hitAt + hit.headerEnd;
+      const needed = Math.round(sampleRate * (hit.mode.seconds + 2));
+      const picture = mono.subarray(absHeaderEnd, absHeaderEnd + needed);
+      handleCapture(hit.mode, picture, sampleRate);
+      report.message = `Decoded ${hit.mode.label} starting ${(hitAt / sampleRate).toFixed(1)}s into the file.`;
+      return report;
+    } finally {
+      try { ctx.close(); } catch { /* noop */ }
+    }
+  }, [handleCapture]);
+
   // Snapshot of the detector's debug counters — the UI reads this to help
   // diagnose why VIS didn't fire (heard the leader? read a byte? matched a
   // known mode?).
@@ -265,5 +335,6 @@ export function useSstvReceiver() {
     refreshDevices,
     saveCurrent,
     getDebug,
+    decodeFile,
   };
 }

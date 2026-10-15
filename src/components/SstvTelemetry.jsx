@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock, Globe, Save, Bug } from 'lucide-react';
+import { AudioLines, Radio, Mic, MicOff, Zap, Download, Image as ImageIcon, Clock, Globe, Save, Bug, FileAudio } from 'lucide-react';
 import { useSstvReceiver } from '@/lib/useSstvReceiver';
 import { telemetry } from '@/lib/mqttService';
 
@@ -57,6 +57,27 @@ export default function SstvTelemetry() {
     const clip = rx.saveCurrent();
     if (!clip) return;
     setSavedClips((prev) => [{ ...clip, t: Date.now() }, ...prev].slice(0, 10));
+  };
+
+  // File upload path — decodes a WAV directly through the detector + per-mode
+  // decoders. If this works but live mic capture doesn't, the issue is the
+  // audio path (speaker->mic lossiness), not the decoder.
+  const [fileReport, setFileReport] = useState(null);
+  const [decoding, setDecoding] = useState(false);
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setDecoding(true);
+    setFileReport(null);
+    try {
+      const report = await rx.decodeFile(file);
+      setFileReport(report);
+    } catch (exc) {
+      setFileReport({ result: 'error', message: exc?.message || String(exc), file_name: file.name });
+    } finally {
+      setDecoding(false);
+    }
   };
 
   // Subscribe to remote captures — every other viewer that decodes an SSTV
@@ -138,6 +159,23 @@ export default function SstvTelemetry() {
             Stop
           </button>
         )}
+
+        <label
+          className={`inline-flex items-center gap-2 rounded-lg border border-border/60 bg-secondary/60 px-3 py-2 text-xs font-mono uppercase transition cursor-pointer ${
+            decoding ? 'opacity-60 cursor-wait' : 'hover:border-accent hover:text-accent'
+          }`}
+          title="Decode a .wav file directly, bypassing the microphone. Useful to sanity-check the decoder against a known clean recording."
+        >
+          <FileAudio className="h-3.5 w-3.5" />
+          {decoding ? 'Decoding…' : 'Decode WAV file'}
+          <input
+            type="file"
+            accept="audio/wav,audio/x-wav,audio/wave,.wav"
+            onChange={handleFile}
+            disabled={decoding}
+            className="hidden"
+          />
+        </label>
 
         {rx.devices.length > 0 && (
           <select
@@ -229,6 +267,36 @@ export default function SstvTelemetry() {
       {rx.error && (
         <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
           {rx.error}
+        </div>
+      )}
+
+      {fileReport && (
+        <div
+          className={`mb-4 rounded-lg border px-3 py-2 text-xs font-mono ${
+            fileReport.result === 'detected'
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+              : fileReport.result === 'no_vis'
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                : 'border-red-500/40 bg-red-500/10 text-red-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <FileAudio className="h-3.5 w-3.5" />
+            <span className="font-semibold">{fileReport.file_name}</span>
+            {fileReport.duration_s && <span className="opacity-70">· {fileReport.duration_s}s</span>}
+            {fileReport.sample_rate && <span className="opacity-70">· {fileReport.sample_rate} Hz</span>}
+          </div>
+          <div>{fileReport.message}</div>
+          {fileReport.debug && (
+            <div className="mt-1 opacity-70">
+              leader_hits={fileReport.debug.leader_hits} ·
+              start_hits={fileReport.debug.start_hits} ·
+              vis_reads={fileReport.debug.vis_reads} ·
+              vis_matched={fileReport.debug.vis_matched} ·
+              last_vis={fileReport.debug.last_vis ?? '—'} ·
+              leader_hz={fileReport.debug.last_leader_freq ?? '—'}
+            </div>
+          )}
         </div>
       )}
 
