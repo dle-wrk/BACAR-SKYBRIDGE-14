@@ -359,6 +359,25 @@ class TelemetryService {
   }
 
   /**
+   * Merge APRS frames pulled from the SondeHub APRS-IS gateway into the
+   * APRS-by-callsign map. Only replaces when the new frame is newer than
+   * what we already have.
+   */
+  mergeAprsFrames(entries) {
+    if (!entries || typeof entries !== 'object') return;
+    let changed = false;
+    for (const [cs, frame] of Object.entries(entries)) {
+      if (!frame) continue;
+      const existing = this.aprsByCallsign.get(cs);
+      if (existing && (frame.t || 0) <= (existing.t || 0)) continue;
+      this.aprsByCallsign.set(cs, frame);
+      this.aprsTelemetry = frame;
+      changed = true;
+    }
+    if (changed) this._emit();
+  }
+
+  /**
    * Merge a batch of SondeHub frames (from the public amateur API) into
    * the by-callsign map. Only replaces when the new frame is newer than
    * what we already have, so the live MQTT path and the HTTP poll path

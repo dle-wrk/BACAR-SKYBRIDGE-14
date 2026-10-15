@@ -3,6 +3,11 @@ import { ExternalLink, MapPin, Plus, Radio, Search, X } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 import { CALLSIGN_CARDS, CALLSIGN_PREFIX } from '@/lib/mqttService';
 import { useUserCallsigns } from '@/lib/useUserCallsigns';
+import { fetchLatestAprsForCallsigns } from '@/lib/aprsApi';
+
+// Match SondehubTelemetry's cadence — the SondeHub APRS gateway relays
+// APRS-IS traffic in near-real time; polling faster than ~30 s is wasteful.
+const POLL_INTERVAL_MS = 30_000;
 
 const APRS_FI_INFO = (cs) => `https://aprs.fi/info/a/${encodeURIComponent(cs.toUpperCase())}`;
 const APRS_FI_CALL = (cs) => `https://aprs.fi/#!call=${encodeURIComponent(cs.toUpperCase())}`;
@@ -79,6 +84,9 @@ function CallsignCard({ callsign, data, onRemove }) {
 
 export default function AprsTelemetry() {
   const [, setTick] = useState(0);
+  const [polling, setPolling] = useState(false);
+  const [pollError, setPollError] = useState(null);
+  const [lastPollAt, setLastPollAt] = useState(0);
   useEffect(() => telemetry.subscribe(() => setTick((t) => t + 1)), []);
 
   const byCallsign = telemetry.getAprsByCallsign();
@@ -100,6 +108,36 @@ export default function AprsTelemetry() {
       extras:   extraList,
     };
   }, [byCallsign, userCs.list]);
+
+  // Poll SondeHub's APRS-IS gateway for every tracked callsign.
+  // Same endpoint SondehubTelemetry uses (api.v2.sondehub.org/amateur/telemetry),
+  // but filtered to modulation === "APRS" (or APRS-shaped path/raw) so we only
+  // show amateur radio APRS traffic, not the LoRa / WSPR frames.
+  const tracked = useMemo(
+    () => [...pinned, ...userList, ...extras],
+    [pinned, userList, extras],
+  );
+  useEffect(() => {
+    if (tracked.length === 0) return undefined;
+    let cancelled = false;
+    const pull = async () => {
+      setPolling(true);
+      setPollError(null);
+      try {
+        const batch = await fetchLatestAprsForCallsigns(tracked, { durationHours: 24 });
+        if (cancelled) return;
+        telemetry.mergeAprsFrames(batch);
+        setLastPollAt(Date.now());
+      } catch (exc) {
+        if (!cancelled) setPollError(exc?.message || String(exc));
+      } finally {
+        if (!cancelled) setPolling(false);
+      }
+    };
+    pull();
+    const id = setInterval(pull, POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [tracked.join(',')]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const total = pinned.length + userList.length + extras.length;
   const anyFresh = [...pinned, ...userList, ...extras].some(
@@ -210,10 +248,26 @@ export default function AprsTelemetry() {
         ))}
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground">
-        <MapPin className="h-3.5 w-3.5 shrink-0" />
-        Showing pinned cards for {CALLSIGN_CARDS.join(', ').toUpperCase()} plus any extra callsigns you add
-        and any other {CALLSIGN_PREFIX.toUpperCase()}-* callsign on the feed. User additions persist on this device.
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <MapPin className="h-3.5 w-3.5 shrink-0" />
+          Pinned {CALLSIGN_CARDS.join(', ').toUpperCase()} + your additions + any {CALLSIGN_PREFIX.toUpperCase()}-* on the feed.
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <ExternalLink className="h-3 w-3" />
+          <a
+            href="https://api.v2.sondehub.org/amateur/telemetry"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline-offset-2 hover:underline hover:text-accent"
+          >
+            Live APRS via SondeHub APRS-IS gateway
+          </a>
+          {polling ? ' · polling…'
+            : pollError ? ` · poll error: ${pollError}`
+            : lastPollAt ? ` · last pull ${Math.max(0, Math.round((Date.now() - lastPollAt) / 1000))}s ago`
+            : ' · poll idle'}
+        </span>
       </div>
     </section>
   );
