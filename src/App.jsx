@@ -9,10 +9,13 @@ import ScrollToTop from './components/ScrollToTop';
 import MissionControl from './pages/MissionControl';
 import StarfieldBackground from './components/StarfieldBackground';
 import IdentifyGate from './components/IdentifyGate';
+import { useAutoRefresh } from '@/lib/useAutoRefresh';
 
 const PublicApp = () => {
   const [observer, setObserverState] = useState(null);
   const [ready, setReady] = useState(false);
+  // Every 5 min check if a new bundle has been deployed and auto-reload.
+  useAutoRefresh();
 
   useEffect(() => {
     setObserverState(getObserver());
