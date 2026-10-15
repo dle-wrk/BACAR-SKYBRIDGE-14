@@ -177,6 +177,22 @@ export default function SstvTelemetry() {
           />
         </label>
 
+        <div className="flex items-center gap-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Live decode
+          </label>
+          <select
+            value={rx.blindMode || ''}
+            onChange={(e) => rx.setBlindMode(e.target.value || null)}
+            title="Decode the rolling audio buffer continuously as this mode, no VIS wait."
+            className="rounded-lg border border-border/60 bg-background/60 px-2 py-1.5 text-xs font-mono text-foreground"
+          >
+            <option value="">off (wait for VIS)</option>
+            <option value="robot36">Robot 36 (36 s window)</option>
+            <option value="martinm1">Martin M1 (114 s window)</option>
+          </select>
+        </div>
+
         {rx.devices.length > 0 && (
           <select
             value={rx.selectedDeviceId}
@@ -235,6 +251,20 @@ export default function SstvTelemetry() {
             <span>leader Hz: <span className="text-foreground">{debug.last_leader_freq ?? '—'}</span></span>
             <span>start Hz: <span className="text-foreground">{debug.last_start_freq ?? '—'}</span></span>
           </div>
+        </div>
+      )}
+
+      {listening && rx.blindMode && !receiving && rx.livePreview && (
+        <div className="mb-4 rounded-xl border border-accent/30 bg-accent/5 p-3">
+          <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span>Blind {rx.blindMode === 'robot36' ? 'Robot 36' : 'Martin M1'} decode · rolling window · updating every ~500 ms</span>
+            <span className="text-accent">continuous</span>
+          </div>
+          <img
+            src={rx.livePreview}
+            alt="Live blind SSTV decode"
+            className="max-h-72 rounded-lg border border-border/60 bg-black"
+          />
         </div>
       )}
 

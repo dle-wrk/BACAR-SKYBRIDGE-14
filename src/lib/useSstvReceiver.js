@@ -16,6 +16,12 @@ export function useSstvReceiver() {
   const [captures, setCaptures] = useState([]);   // most recent first
   const [devices, setDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  // Blind-decode mode: when set, continuously decode the rolling audio
+  // buffer as that SSTV mode without waiting for a VIS lock. 'robot36'
+  // for a 36 s sliding window, 'martinm1' for 114 s, etc. null = off.
+  const [blindMode, setBlindMode] = useState(null);
+  const blindModeRef = useRef(null);
+  useEffect(() => { blindModeRef.current = blindMode; }, [blindMode]);
 
   const contextRef = useRef(null);
   const streamRef = useRef(null);
@@ -160,6 +166,51 @@ export function useSstvReceiver() {
         }
 
         if (modeRef.current === null) {
+          // Blind-decode mode — run the chosen decoder over the last
+          // mode.seconds of rolling buffer every ~500 ms. Lets the operator
+          // watch the image render continuously the moment they hit Start,
+          // without waiting for a VIS header.
+          const blindKey = blindModeRef.current;
+          const blindMode = blindKey
+            ? Object.values(MODES).find((m) => m.key === blindKey)
+            : null;
+          const blindDecoder = blindMode?.decoder ? DECODERS[blindMode.decoder] : null;
+          const nowMs = performance.now();
+          if (
+            blindDecoder &&
+            !previewBusyRef.current &&
+            nowMs - lastPreviewAtRef.current > 500 &&
+            rollingHaveRef.current > ctx.sampleRate * 1
+          ) {
+            lastPreviewAtRef.current = nowMs;
+            previewBusyRef.current = true;
+            Promise.resolve().then(() => {
+              try {
+                // Grab the last blindMode.seconds of rolling audio.
+                const want = Math.round(ctx.sampleRate * blindMode.seconds);
+                const total = rollingHaveRef.current;
+                const take = Math.min(want, total);
+                const audio = new Float32Array(take);
+                let needed = take;
+                let dst = take;
+                // Walk the chunk array from the newest end backwards.
+                for (let i = rollingBufRef.current.length - 1; i >= 0 && needed > 0; i--) {
+                  const c = rollingBufRef.current[i];
+                  const copy = Math.min(c.length, needed);
+                  audio.set(c.subarray(c.length - copy), dst - copy);
+                  dst -= copy;
+                  needed -= copy;
+                }
+                const rgba = blindDecoder(audio, ctx.sampleRate);
+                setLivePreview(rgbaToPngDataUrl(rgba));
+              } catch (exc) {
+                console.warn('[sstv] blind-decode failed', exc);
+              } finally {
+                previewBusyRef.current = false;
+              }
+            });
+          }
+
           detector.feed(chunk);
           const hit = detector.scan();
           if (hit) {
@@ -382,5 +433,7 @@ export function useSstvReceiver() {
     getDebug,
     decodeFile,
     livePreview,
+    blindMode,
+    setBlindMode,
   };
 }
