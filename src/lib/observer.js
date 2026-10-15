@@ -1,10 +1,13 @@
 // @ts-nocheck
 // Observer identity (no password) — stored locally. Public access.
 
-// v2 bumps the storage key to force every existing viewer back to the
-// IdentifyGate — previous saves (v1) lacked GPS lat/lon on observer
-// records and the gate now insists on real coordinates for both roles.
-const KEY = 'bacar_observer_v2';
+// v3 bumps the storage key again to force every viewer back to the
+// IdentifyGate so the new location-required rules apply to all sessions,
+// including any that identified before the mandatory-GPS enforcement
+// landed in v2. Both roles must now have real coordinates:
+//   - Ham → full 6-char Maidenhead grid (regex-enforced on submit)
+//   - Observer → GPS lat/lon captured via browser geolocation
+const KEY = 'bacar_observer_v3';
 
 /**
  * @typedef {Object} Observer
