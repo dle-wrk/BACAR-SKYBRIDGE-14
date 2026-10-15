@@ -118,7 +118,7 @@ export default function SondehubTelemetry() {
       setPolling(true);
       setPollError(null);
       try {
-        const batch = await fetchLatestForCallsigns(tracked, { durationHours: 2 });
+        const batch = await fetchLatestForCallsigns(tracked, { durationHours: 3 });
         if (cancelled) return;
         telemetry.mergeSondehubFrames(batch);
         setLastPollAt(Date.now());

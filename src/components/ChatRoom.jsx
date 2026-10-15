@@ -312,10 +312,18 @@ export default function ChatRoom({ observer }) {
     };
   }, [observer, currentUserName]);
 
-  const visibleUsers = useMemo(
-    () => [...users].sort((a, b) => (a.username || '').localeCompare(b.username || '')),
-    [users]
-  );
+  // Dedup by lower-cased username so the same person on multiple tabs — or
+  // picked up twice by the ChatRoom's reader because mqttService ALSO
+  // publishes presence on lumina/attendees — collapses to one row.
+  const visibleUsers = useMemo(() => {
+    const byName = new Map();
+    for (const u of users) {
+      const key = (u.username || 'guest').toLowerCase();
+      const existing = byName.get(key);
+      if (!existing || (u.lastSeen || 0) > (existing.lastSeen || 0)) byName.set(key, u);
+    }
+    return Array.from(byName.values()).sort((a, b) => (a.username || '').localeCompare(b.username || ''));
+  }, [users]);
 
   const handleSend = (event) => {
     event.preventDefault();

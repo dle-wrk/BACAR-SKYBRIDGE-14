@@ -526,8 +526,21 @@ class TelemetryService {
 
   _maybeAutoBackup() {
     const now = Date.now();
+    // First-ever run: seed the timestamp and bail. Otherwise the very first
+    // join triggers an "it's been forever since the last backup" download,
+    // which is noise — the backup is for actual 5-day cycles.
+    if (this.lastBackupAt === 0) {
+      this.lastBackupAt = now;
+      try { localStorage.setItem(PRESENCE_LAST_BACKUP_KEY, String(now)); } catch { /* ignore */ }
+      return;
+    }
     if (now - this.lastBackupAt < PRESENCE_BACKUP_INTERVAL) return;
     if (this.presenceHistory.length === 0) return;
+    // Also require at least one entry older than the backup interval, so a
+    // 5-day-old session that just joined doesn't trigger an export of only
+    // the newest row.
+    const oldest = this.presenceHistory.reduce((min, e) => Math.min(min, e?.t || now), now);
+    if (now - oldest < PRESENCE_BACKUP_INTERVAL) return;
     this.lastBackupAt = now;
     try {
       localStorage.setItem(PRESENCE_LAST_BACKUP_KEY, String(now));

@@ -24,6 +24,32 @@
 //      (latitude/longitude/altitude_m/temperature_c/t/uploader/...).
 
 const BASE = 'https://api.v2.sondehub.org/amateur/telemetry';
+// SondeHub only accepts a specific set of duration values. Anything else
+// returns 200 with the error text listing these. We pick the closest-but-
+// at-least-as-long value for whatever hours the caller asks for.
+const VALID_DURATIONS = [
+  { label: '15s',  seconds: 15 },
+  { label: '1m',   seconds: 60 },
+  { label: '30m',  seconds: 30 * 60 },
+  { label: '1h',   seconds: 3600 },
+  { label: '3h',   seconds: 3 * 3600 },
+  { label: '6h',   seconds: 6 * 3600 },
+  { label: '12h',  seconds: 12 * 3600 },
+  { label: '1d',   seconds: 86400 },
+  { label: '3d',   seconds: 3 * 86400 },
+  { label: '7d',   seconds: 7 * 86400 },
+  { label: '31d',  seconds: 31 * 86400 },
+  { label: '186d', seconds: 186 * 86400 },
+  { label: '366d', seconds: 366 * 86400 },
+];
+
+function closestDurationLabel(hours) {
+  const want = Math.max(1, hours) * 3600;
+  for (const d of VALID_DURATIONS) {
+    if (d.seconds >= want) return d.label;
+  }
+  return '366d';
+}
 
 /**
  * Fetch the newest frame for each callsign.
@@ -34,12 +60,12 @@ const BASE = 'https://api.v2.sondehub.org/amateur/telemetry';
 export async function fetchLatestForCallsigns(callsigns, opts = {}) {
   const out = {};
   if (!callsigns || callsigns.length === 0) return out;
-  const durationHours = Math.max(1, Math.min(24, opts.durationHours ?? 2));
+  const durationLabel = closestDurationLabel(Math.max(1, Math.min(24, opts.durationHours ?? 3)));
 
   // The API takes a single payload_callsign per request. Fire them in parallel.
   const results = await Promise.allSettled(
     callsigns.map(async (cs) => {
-      const url = `${BASE}?payload_callsign=${encodeURIComponent(cs.toUpperCase())}&duration=${durationHours}h`;
+      const url = `${BASE}?payload_callsign=${encodeURIComponent(cs.toUpperCase())}&duration=${durationLabel}`;
       const resp = await fetch(url, { headers: { 'accept': 'application/json' } });
       if (!resp.ok) throw new Error(`sondehub ${cs}: HTTP ${resp.status}`);
       const data = await resp.json();

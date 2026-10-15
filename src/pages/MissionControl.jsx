@@ -21,13 +21,18 @@ export default function MissionControl({ observer, onSignOut }) {
   useEffect(() => {
     const unsub = telemetry.subscribe(setCubes);
     // Register this viewer's identity for presence broadcasts.
-    const coords = observer?.grid ? gridToLatLon(observer.grid) : null;
+    // Ham observers → derive map coordinates from their Maidenhead grid.
+    // Observers → use the browser-geolocation coords they shared at identify
+    // (if any); fall back to no map pin otherwise.
+    const gridCoords = observer?.grid ? gridToLatLon(observer.grid) : null;
+    const lat = Number.isFinite(observer?.lat) ? observer.lat : (gridCoords?.lat ?? null);
+    const lon = Number.isFinite(observer?.lon) ? observer.lon : (gridCoords?.lon ?? null);
     telemetry.setObserverIdentity({
       name:     observer?.name || observer?.username,
       callsign: observer?.callsign,
       location: observer?.location || observer?.grid || null,
-      lat:      coords?.lat ?? null,
-      lon:      coords?.lon ?? null,
+      lat,
+      lon,
       type:     observer?.type || 'guest',
     });
     telemetry.connect();

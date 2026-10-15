@@ -26,6 +26,14 @@ export function useSstvReceiver() {
   const contextRef = useRef(null);
   const streamRef = useRef(null);
   const detectorRef = useRef(null);
+  // Mobile background-audio helpers:
+  //   - wakeLockRef: Screen Wake Lock keeps the display from sleeping while
+  //     listening, which also stops aggressive tab suspension on Android.
+  //   - silentNodeRef: a constant 0-amplitude oscillator connected to the
+  //     destination so the OS classifies the page as "actively playing media"
+  //     and keeps the AudioContext alive when the tab is backgrounded.
+  const wakeLockRef = useRef(null);
+  const silentNodeRef = useRef(null);
   const modeRef = useRef(null);        // active mode while receiving
   const targetSamplesRef = useRef(0);
   const captureBufRef = useRef([]);
@@ -52,6 +60,20 @@ export function useSstvReceiver() {
   }, []);
 
   const stop = useCallback(() => {
+    if (silentNodeRef.current) {
+      try { silentNodeRef.current.stop(); } catch { /* noop */ }
+      silentNodeRef.current = null;
+    }
+    if (wakeLockRef.current) {
+      try { wakeLockRef.current.release(); } catch { /* noop */ }
+      wakeLockRef.current = null;
+    }
+    try {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      }
+    } catch { /* ignore */ }
     if (contextRef.current) {
       try { contextRef.current.close(); } catch { /* noop */ }
       contextRef.current = null;
@@ -287,12 +309,50 @@ export function useSstvReceiver() {
       };
 
       source.connect(worklet);
-      // A destination connect isn't strictly required for AudioWorkletNode,
-      // but it keeps the graph active on all browsers. We connect to a muted
-      // GainNode so the operator doesn't hear their own mic looped back.
+      // Mute the worklet output so the operator doesn't hear their own mic
+      // looped back. We still need a destination connect to keep the graph
+      // scheduled on all browsers.
       const muteSink = ctx.createGain();
       muteSink.gain.value = 0;
       worklet.connect(muteSink).connect(ctx.destination);
+
+      // Background-audio keep-alive — mobile browsers suspend AudioContexts
+      // on backgrounded tabs unless the page is actively playing audio.
+      // A 0-amplitude oscillator counts as "playing", so iOS Safari / Chrome
+      // Android keep the capture going when the user switches apps to play
+      // the SSTV source (WhatsApp voice note, YouTube clip, etc.).
+      try {
+        const silent = ctx.createOscillator();
+        silent.frequency.value = 20_000; // out of audible range anyway
+        const silentGain = ctx.createGain();
+        silentGain.gain.value = 0;
+        silent.connect(silentGain).connect(ctx.destination);
+        silent.start();
+        silentNodeRef.current = silent;
+      } catch { /* silent-audio hack is best-effort */ }
+
+      // Keep the screen on while listening — also massively reduces the
+      // chance the OS backgrounds the tab.
+      try {
+        if (navigator.wakeLock?.request) {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+        }
+      } catch { /* wake-lock best effort */ }
+
+      // Tell the OS media-session this page is a running media source so
+      // the OS leaves the tab alone and the lock-screen media controls
+      // show something meaningful.
+      try {
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title:  'Skybridge 14 — SSTV Receiver',
+            artist: 'Listening for SSTV',
+            album:  'BACAR Skybridge 14',
+          });
+          navigator.mediaSession.playbackState = 'playing';
+          navigator.mediaSession.setActionHandler?.('stop', () => stop());
+        }
+      } catch { /* ignore */ }
     } catch (exc) {
       console.error('[sstv] start failed', exc);
       setError(exc?.message || String(exc));

@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { Radio, MapPin, ArrowRight, Check } from 'lucide-react';
+import { Radio, MapPin, ArrowRight, Check, Crosshair, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { isValidGrid, normalizeGrid, setObserver } from '@/lib/observer';
 
-// No-password identification: amateur radio operator (callsign + grid)
-// or general observer (name + location).
+// Full 6-char grids resolve to a ~5' × 2.5' square — accurate enough to
+// put a map pin on a specific suburb; 4-char grids only resolve to a
+// 2° × 1° square (covering several towns), so for a mission map we
+// require the full 6-char form.
+const GRID_RE_FULL = /^[A-R]{2}[0-9]{2}[A-X]{2}$/;
+
 export default function IdentifyGate({ onIdentified }) {
   const [mode, setMode] = useState('ham');
   const [callsign, setCallsign] = useState('');
@@ -14,6 +18,50 @@ export default function IdentifyGate({ onIdentified }) {
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
   const [error, setError] = useState('');
+  const [geoBusy, setGeoBusy] = useState(false);
+
+  // Browser geolocation → fills Location + optionally stashes raw coords
+  // on the observer so the "Who's Watching" map can pin them without any
+  // reverse-geocoding dance.
+  const [coords, setCoords] = useState(null);
+  const requestGeo = () => {
+    if (!navigator.geolocation) {
+      setError('This browser does not expose geolocation.');
+      return;
+    }
+    setGeoBusy(true);
+    setError('');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setCoords({ lat: latitude, lon: longitude });
+        // Best-effort reverse geocode via OpenStreetMap Nominatim (public,
+        // no key; rate-limited but fine for a one-shot on identify).
+        try {
+          const resp = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&zoom=12`,
+            { headers: { 'accept': 'application/json' } },
+          );
+          if (resp.ok) {
+            const j = await resp.json();
+            const a = j?.address || {};
+            const area = [
+              a.suburb || a.neighbourhood || a.village || a.town || a.city || a.hamlet,
+              a.state || a.province || a.region,
+              a.country_code ? a.country_code.toUpperCase() : null,
+            ].filter(Boolean).join(', ');
+            if (area) setLocation(area);
+          }
+        } catch { /* best effort, ignore */ }
+        setGeoBusy(false);
+      },
+      (err) => {
+        setGeoBusy(false);
+        setError(`Location unavailable: ${err.message || 'permission denied'}`);
+      },
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  };
 
   const submit = (e) => {
     e.preventDefault();
@@ -22,7 +70,10 @@ export default function IdentifyGate({ onIdentified }) {
       const cs = callsign.trim();
       const g = normalizeGrid(grid);
       if (cs.length < 3) return setError('Callsign must be at least 3 characters.');
-      if (!isValidGrid(g)) return setError('Grid locator must be 4–6 chars, e.g. KG44 or KG44ab.');
+      if (!GRID_RE_FULL.test(g)) {
+        return setError('Grid locator must be the full 6 characters (e.g. KG44AB). 4-char grids are too coarse for the map.');
+      }
+      if (!isValidGrid(g)) return setError('Grid locator is not valid Maidenhead.');
       const obs = { type: 'ham', callsign: cs.toUpperCase(), grid: g, joined: Date.now() };
       setObserver(obs);
       onIdentified(obs);
@@ -30,8 +81,15 @@ export default function IdentifyGate({ onIdentified }) {
       const n = name.trim();
       if (n.length < 2) return setError('Please enter a name.');
       const loc = location.trim();
-      if (loc.length < 2) return setError('Please enter a location.');
-      const obs = { type: 'observer', name: n, location: loc, joined: Date.now() };
+      if (loc.length < 2) return setError('Please enter a location (or tap "Use my location").');
+      const obs = {
+        type: 'observer',
+        name: n,
+        location: loc,
+        lat: coords?.lat ?? null,
+        lon: coords?.lon ?? null,
+        joined: Date.now(),
+      };
       setObserver(obs);
       onIdentified(obs);
     }
@@ -88,17 +146,21 @@ export default function IdentifyGate({ onIdentified }) {
                 />
               </div>
               <div>
-                <Label htmlFor="grid">Maidenhead Grid Locator (4–6 chars)</Label>
+                <Label htmlFor="grid">Maidenhead Grid Locator (6 chars required)</Label>
                 <Input
                   id="grid"
                   value={grid}
                   onChange={(e) => setGrid(e.target.value)}
-                  placeholder="e.g. KG44 or KG44ab"
+                  placeholder="e.g. KG44AB"
                   className="font-mono uppercase mt-1.5"
                   autoCapitalize="characters"
                   maxLength={6}
+                  minLength={6}
                 />
-                <p className="text-xs text-muted-foreground mt-1.5">Used to plot your receiving station on the map.</p>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Needs the full 6-character form (two letters + two digits + two letters) so the map pin is accurate
+                  to about a 5 km square. 4-char grids cover a whole 2° × 1° region.
+                </p>
               </div>
             </>
           ) : (
@@ -115,15 +177,31 @@ export default function IdentifyGate({ onIdentified }) {
                 />
               </div>
               <div>
-                <Label htmlFor="loc">Location</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="loc">Location</Label>
+                  <button
+                    type="button"
+                    onClick={requestGeo}
+                    disabled={geoBusy}
+                    className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-secondary/60 px-2 py-1 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent disabled:opacity-60"
+                  >
+                    {geoBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Crosshair className="h-3 w-3" />}
+                    {geoBusy ? 'Locating…' : 'Use my location'}
+                  </button>
+                </div>
                 <Input
                   id="loc"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
                   placeholder="e.g. Bloemfontein, ZA"
                   className="mt-1.5"
-                  maxLength={60}
+                  maxLength={80}
                 />
+                {coords && (
+                  <p className="mt-1.5 text-[11px] font-mono text-muted-foreground">
+                    GPS fix: {coords.lat.toFixed(4)}, {coords.lon.toFixed(4)} — will plot on the Who&apos;s Watching map.
+                  </p>
+                )}
               </div>
             </>
           )}
