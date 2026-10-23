@@ -825,6 +825,42 @@ class TelemetryService {
     this._emit();
   }
 
+  // Nuclear option — wipe every bit of locally cached mission data from
+  // THIS BROWSER. Used by the password-gated "Clear all data" button.
+  // Does not affect other viewers, the broker, or any server. The password
+  // check happens in the UI; this method just does the wipe.
+  clearAllLocalData() {
+    for (const c of this.cubes) {
+      c.telemetry = null;
+      c.history = [];
+      c.images = [];
+    }
+    this.aprsTelemetry = null;
+    this.sondehubTelemetry = null;
+    this.aprsByCallsign = new Map();
+    this.sondehubByCallsign = new Map();
+    this.sstvStatus = null;
+    this.sstvHistory = [];
+    this.alerts = [];
+    this.lastAlertAt = {};
+    this.presenceById = new Map();
+    this.presenceHistory = [];
+    this.lastBackupAt = 0;
+    const KEYS = [
+      LAST_TELEMETRY_KEY,
+      FLIGHT_HISTORY_KEY,
+      PRESENCE_HISTORY_KEY,
+      PRESENCE_LAST_BACKUP_KEY,
+      'bacar_mission_chat_room_v1',
+      'bacar_user_callsigns_v1',
+    ];
+    for (const k of KEYS) {
+      try { localStorage.removeItem(k); } catch {}
+    }
+    this._emit();
+    this._emitAlerts();
+  }
+
   /**
    * @param {string} cubeId
    * @param {string} imageUrl

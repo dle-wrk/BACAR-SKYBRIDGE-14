@@ -1,7 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { telemetry } from '@/lib/mqttService';
 import { observerDisplayName } from '@/lib/observer';
-import { Radio, Settings, LogOut, Wifi, Activity, Users } from 'lucide-react';
+import { Radio, Settings, LogOut, Wifi, Activity, Users, Trash2 } from 'lucide-react';
+
+// Soft client-side gate on the "Clear all data" button. NOT a security
+// mechanism — the password is in the shipped JS and localStorage can be
+// wiped from DevTools anyway. Purpose: prevent accidental clicks.
+const CLEAR_PASSWORD = 'Chr1stmasVibeBac@r';
+
+function clearAllDataFlow() {
+  const pw = window.prompt('Clear ALL local mission data on this browser?\n\nThis wipes flight history, chat messages, and the Who\'s Watching log stored on this device only — the broker and other viewers are untouched.\n\nEnter password to confirm:');
+  if (pw === null) return;  // cancelled
+  if (pw !== CLEAR_PASSWORD) {
+    window.alert('Wrong password. No data was cleared.');
+    return;
+  }
+  if (!window.confirm('Last chance — clear everything?')) return;
+  telemetry.clearAllLocalData();
+  window.alert('All local mission data cleared.');
+}
 
 // Freshness thresholds — above STALE_MS the feed is amber; above DEAD_MS red.
 // 30 s matches typical cube telemetry cadence; 60 s means something broke.
@@ -106,6 +123,13 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
           )}
         </div>
 
+        <button
+          onClick={clearAllDataFlow}
+          className="p-2 rounded-lg hover:bg-red-500/10 transition text-muted-foreground hover:text-red-300"
+          title="Clear all local mission data (password protected)"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
         <button
           onClick={onOpenSettings}
           className="p-2 rounded-lg hover:bg-secondary transition text-muted-foreground hover:text-foreground"
