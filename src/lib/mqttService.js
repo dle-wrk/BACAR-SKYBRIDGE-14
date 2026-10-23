@@ -131,16 +131,63 @@ function normalizeTelemetryPayload(payload) {
     if (value !== undefined) telemetry[key] = value;
   };
 
-  setNumber('altitude_m', ['altitude_m', 'altitude', 'altitude_meters', 'altitudeMeters']);
+  // altitude: prefer explicit altitude_m, fall back to GPS altitude on v2.
+  setNumber('altitude_m', ['altitude_m', 'altitude', 'altitude_meters', 'altitudeMeters', 'gps_altitude_m']);
+  // temperature: v2 ships SHT (`temp`), BMP (`bmp_temp_c`) and ICM (`icm_temp_c`).
+  // Prefer SHT (ambient) as the headline, keep the others as their own fields below.
   setNumber('temperature_c', ['temperature_c', 'temperature', 'temp_c', 'temp']);
-  setNumber('pressure_hpa', ['pressure_hpa', 'pressure', 'air_pressure_hpa', 'barometric_pressure']);
+  setNumber('pressure_hpa', ['pressure_hpa', 'pressure', 'bmp_pressure_hpa', 'air_pressure_hpa', 'barometric_pressure']);
+  setNumber('humidity', ['humidity', 'humidity_pct', 'rh', 'relative_humidity']);
+  // Mirror onto humidity_pct so pre-v2 chart components (dataKey='humidity_pct') keep working.
+  if (telemetry.humidity !== undefined && telemetry.humidity_pct === undefined) {
+    telemetry.humidity_pct = telemetry.humidity;
+  }
   setNumber('battery_v', ['battery_v', 'battery_voltage', 'battery_voltage_v', 'voltage', 'batteryVoltage']);
   setNumber('battery_current_ma', ['battery_current_ma', 'current_ma', 'current_draw_ma', 'current_draw', 'currentDraw']);
   setNumber('latitude', ['latitude', 'lat', 'gps_lat', 'gps_latitude', 'gpsLat']);
   setNumber('longitude', ['longitude', 'lon', 'lng', 'gps_lon', 'gps_longitude', 'gpsLon']);
   setNumber('vertical_speed_ms', ['vertical_speed_ms', 'vertical_speed', 'climb_rate', 'climbRate']);
-  setNumber('speed_ms', ['speed_ms', 'speed', 'ground_speed', 'groundSpeed']);
-  setNumber('heading_deg', ['heading_deg', 'heading', 'course', 'bearing']);
+  setNumber('speed_ms', ['speed_ms', 'speed', 'ground_speed', 'groundSpeed', 'gps_speed_m_s']);
+  setNumber('heading_deg', ['heading_deg', 'heading', 'course', 'bearing', 'gps_course_deg']);
+
+  // v2 sensor extras — kept as their own fields so the dashboard can expose
+  // them without clobbering the headline temp/pressure above.
+  setNumber('bmp_temp_c', ['bmp_temp_c']);
+  setNumber('bmp_pressure_hpa', ['bmp_pressure_hpa']);
+  setNumber('icm_temp_c', ['icm_temp_c']);
+  // TSL2591 broad-spectrum light
+  setNumber('tsl_full',    ['tsl_full']);
+  setNumber('tsl_ir',      ['tsl_ir']);
+  setNumber('tsl_visible', ['tsl_visible']);
+  setNumber('tsl_lux',     ['tsl_lux']);
+  // LTR390 UV
+  setNumber('ltr_light_raw', ['ltr_light_raw']);
+  setNumber('ltr_uv_raw',    ['ltr_uv_raw']);
+  setNumber('ltr_lux',       ['ltr_lux']);
+  setNumber('ltr_uv_index',  ['ltr_uv_index', 'uv_index']);
+  // SGP40 air quality (raw VOC counts; dashboard can scale/label)
+  setNumber('sgp40_raw', ['sgp40_raw']);
+  // ICM-20948 9-DOF
+  setNumber('accel_x_g', ['accel_x_g']);
+  setNumber('accel_y_g', ['accel_y_g']);
+  setNumber('accel_z_g', ['accel_z_g']);
+  setNumber('gyro_x_dps', ['gyro_x_dps']);
+  setNumber('gyro_y_dps', ['gyro_y_dps']);
+  setNumber('gyro_z_dps', ['gyro_z_dps']);
+  setNumber('mag_x_ut', ['mag_x_ut']);
+  setNumber('mag_y_ut', ['mag_y_ut']);
+  setNumber('mag_z_ut', ['mag_z_ut']);
+  // GPS state (counts/flags, not coords)
+  setNumber('gps_satellites', ['gps_satellites', 'sats', 'satellites']);
+  setNumber('gps_mode',       ['gps_mode']);
+  // LoRa link quality from gateway
+  setNumber('rssi_dbm', ['rssi_dbm', 'rssi']);
+  setNumber('snr_db',   ['snr_db', 'snr']);
+  setNumber('gateway_received_count', ['gateway_received_count']);
+  // Protocol / housekeeping
+  setNumber('protocol_version', ['protocol_version']);
+  setNumber('sequence',         ['sequence', 'seq']);
+  setNumber('rpi_runtime_s',    ['rpi_runtime_s', 'uptime_s', 'runtime_s']);
   setNumber('vhf_frequency', ['vhf_frequency', 'vhf_freq', 'vhfFrequency']);
   setNumber('uhf_frequency', ['uhf_frequency', 'uhf_freq', 'uhfFrequency']);
   setNumber('vhf_power', ['vhf_power', 'vhf_tx_power', 'vhfPower']);
@@ -158,13 +205,27 @@ function normalizeTelemetryPayload(payload) {
     telemetry.longitude = asNumber(findTelemetryValue(nestedGps, ['lon', 'lng', 'longitude']));
   }
   telemetry.callsign = read(['callsign', 'call_sign', 'station', 'station_id']);
-  telemetry.uploader = read(['uploader', 'uploaded_by', 'receiver', 'uploader_callsign']);
+  telemetry.uploader = read(['uploader', 'uploaded_by', 'receiver', 'uploader_callsign', 'gateway_id']);
   telemetry.symbol = read(['symbol', 'symbol_code', 'symbol_table']);
   telemetry.comment = read(['comment', 'message', 'status_text']);
   telemetry.tracking_mode = read(['tracking_mode', 'tracking', 'track_mode', 'mode']);
   telemetry.status = read(['status', 'state', 'mission_status', 'flight_status']);
   telemetry.errors = read(['errors', 'error', 'faults', 'warnings']);
-  telemetry.t = asNumber(read(['t', 'time', 'timestamp', 'timestamp_ms'])) || Date.now();
+
+  // v2 flags — keep as booleans so the UI can render pills without coercion games.
+  const bool = (v) => (typeof v === 'boolean' ? v : v === 1 ? true : v === 0 ? false : undefined);
+  const sensorOk = bool(read(['sensor_ok']));
+  const gpsValid = bool(read(['gps_valid']));
+  const gps3d    = bool(read(['gps_3d']));
+  if (sensorOk !== undefined) telemetry.sensor_ok = sensorOk;
+  if (gpsValid !== undefined) telemetry.gps_valid = gpsValid;
+  if (gps3d    !== undefined) telemetry.gps_3d    = gps3d;
+
+  // Timestamp: prefer the gateway's wall clock when it's present, otherwise
+  // fall back to local receive-time. v2 ships `utc_unix_s` (seconds).
+  const utcS = asNumber(read(['utc_unix_s']));
+  const tRaw = asNumber(read(['t', 'time', 'timestamp', 'timestamp_ms']));
+  telemetry.t = tRaw || (utcS ? utcS * 1000 : Date.now());
   return telemetry;
 }
 

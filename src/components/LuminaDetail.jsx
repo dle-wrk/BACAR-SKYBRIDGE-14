@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Mountain, TrendingUp, TrendingDown, Thermometer, Gauge, Droplets, MapPin, Clock, Radio } from 'lucide-react';
+import { Mountain, TrendingUp, TrendingDown, Thermometer, Gauge, Droplets, MapPin, Clock, Radio, ChevronDown, ChevronRight } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -35,6 +35,87 @@ function Stat({ icon: Icon, label, value, unit }) {
         {value ?? '--'}
         {unit && <span className="ml-1 text-xs font-normal text-muted-foreground">{unit}</span>}
       </div>
+    </div>
+  );
+}
+
+// Group every known telemetry field by sensor family. Any key the live packet
+// carries that isn't listed below falls into "Other", so new fields show up
+// without a code change.
+const FIELD_GROUPS = [
+  { title: 'GPS',          keys: ['latitude', 'longitude', 'altitude_m', 'gps_altitude_m', 'speed_ms', 'gps_speed_m_s', 'heading_deg', 'gps_course_deg', 'gps_satellites', 'gps_mode', 'gps_valid', 'gps_3d'] },
+  { title: 'Environment',  keys: ['temperature_c', 'humidity', 'humidity_pct', 'pressure_hpa', 'bmp_temp_c', 'bmp_pressure_hpa', 'icm_temp_c', 'vertical_speed_ms'] },
+  { title: 'Light / UV',   keys: ['tsl_full', 'tsl_ir', 'tsl_visible', 'tsl_lux', 'ltr_light_raw', 'ltr_uv_raw', 'ltr_lux', 'ltr_uv_index'] },
+  { title: 'Air quality',  keys: ['sgp40_raw'] },
+  { title: 'IMU',          keys: ['accel_x_g', 'accel_y_g', 'accel_z_g', 'gyro_x_dps', 'gyro_y_dps', 'gyro_z_dps', 'mag_x_ut', 'mag_y_ut', 'mag_z_ut'] },
+  { title: 'Power',        keys: ['battery_v', 'battery_current_ma'] },
+  { title: 'Link',         keys: ['rssi_dbm', 'snr_db', 'gateway_received_count', 'uploader'] },
+  { title: 'Housekeeping', keys: ['protocol_version', 'sequence', 'rpi_runtime_s', 'utc_unix_s', 'status', 'sensor_ok', 'errors', 't'] },
+];
+// Keys handled explicitly in the hero / stat grid — hide from the raw panel
+// so it's additive, not a duplicate of what's already on screen above.
+const HERO_KEYS = new Set(['altitude_m', 'temperature_c', 'pressure_hpa', 'humidity', 'humidity_pct', 'speed_ms', 'latitude', 'longitude', 'vertical_speed_ms']);
+
+function formatValue(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return String(v);
+    // Short integers stay as-is; floats trim to 3 dp.
+    return Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/\.?0+$/, '');
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function RawTelemetry({ t }) {
+  const [open, setOpen] = useState(false);
+  const groups = useMemo(() => {
+    if (!t) return [];
+    const seen = new Set(HERO_KEYS);
+    const result = FIELD_GROUPS.map((g) => {
+      const rows = g.keys
+        .filter((k) => !HERO_KEYS.has(k) && t[k] !== undefined)
+        .map((k) => { seen.add(k); return [k, t[k]]; });
+      return { title: g.title, rows };
+    }).filter((g) => g.rows.length > 0);
+    const other = Object.entries(t)
+      .filter(([k]) => !seen.has(k) && !FIELD_GROUPS.some((g) => g.keys.includes(k)))
+      .sort(([a], [b]) => a.localeCompare(b));
+    if (other.length) result.push({ title: 'Other', rows: other });
+    return result;
+  }, [t]);
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  return (
+    <div className="mt-5 rounded-xl border border-border/50 bg-background/40">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"
+      >
+        <span className="flex items-center gap-1.5">
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          All telemetry fields
+        </span>
+        <span className="font-mono">{total} fields · live</span>
+      </button>
+      {open && (
+        <div className="grid gap-3 border-t border-border/50 p-3 sm:grid-cols-2 xl:grid-cols-3">
+          {groups.map((g) => (
+            <div key={g.title} className="rounded-lg border border-border/40 bg-secondary/20 p-2">
+              <div className="mb-1.5 text-[9px] uppercase tracking-wider text-accent">{g.title}</div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[11px]">
+                {g.rows.map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="truncate text-muted-foreground" title={k}>{k}</dt>
+                    <dd className="truncate text-right text-foreground" title={formatValue(v)}>{formatValue(v)}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -233,6 +314,9 @@ export default function LuminaDetail({ cube }) {
             <Graph title="Pressure"     data={history} dataKey="pressure_hpa"      unit="hPa"   color="#34d399" />
             <Graph title="Humidity"     data={history} dataKey="humidity_pct"      unit="%"     color="#60a5fa" />
           </div>
+
+          {/* Raw dump — every field on the live packet, auto-updating. */}
+          <RawTelemetry t={t} />
         </>
       )}
     </section>
