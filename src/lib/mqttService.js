@@ -15,7 +15,18 @@ export const MQTT_TOPICS = {
   sstvStatus: 'sstv/status',
   chat: 'lumina/chat',
   attendees: 'lumina/attendees',
+  // Broadcast-wipe channel. A publisher sends `{type:'wipe', at:<ms>, token:'…'}`
+  // retained; every subscriber verifies the token matches and wipes their own
+  // local data if their stored last-wipe-at is older. Retained so late
+  // joiners pick it up on subscribe.
+  admin: 'lumina/admin',
 };
+
+// Must match the gate password in TopBar.jsx. Shared with every connected
+// browser — not real security, just a soft marker so rogue traffic on the
+// topic can't nuke everyone by accident.
+const CLEAR_TOKEN = 'Chr1stmasVibeBac@r';
+const LAST_WIPE_KEY = 'bacar_last_wipe_at_v1';
 
 const SSTV_HISTORY_MAX = 20;
 
@@ -825,11 +836,9 @@ class TelemetryService {
     this._emit();
   }
 
-  // Nuclear option — wipe every bit of locally cached mission data from
-  // THIS BROWSER. Used by the password-gated "Clear all data" button.
-  // Does not affect other viewers, the broker, or any server. The password
-  // check happens in the UI; this method just does the wipe.
-  clearAllLocalData() {
+  // Internal: do the actual wipe on this browser only. Shared between the
+  // local-only clear path and the one triggered by an incoming admin msg.
+  _doLocalWipe() {
     for (const c of this.cubes) {
       c.telemetry = null;
       c.history = [];
@@ -859,6 +868,33 @@ class TelemetryService {
     }
     this._emit();
     this._emitAlerts();
+  }
+
+  // Wipe this browser only. No broadcast.
+  clearAllLocalData() {
+    this._doLocalWipe();
+  }
+
+  // Wipe this browser AND broadcast a retained MQTT msg so every other
+  // currently-connected viewer wipes too, and any future viewer wipes on
+  // their first subscribe. The token prevents random publishers on the
+  // public broker from nuking everyone by accident.
+  clearAllDataEverywhere() {
+    const at = Date.now();
+    try { localStorage.setItem(LAST_WIPE_KEY, String(at)); } catch {}
+    this._doLocalWipe();
+    const payload = JSON.stringify({ type: 'wipe', at, token: CLEAR_TOKEN });
+    if (this.client?.connected) {
+      // retain=true so late joiners pick it up as soon as they subscribe.
+      this.client.publish(MQTT_TOPICS.admin, payload, { qos: 1, retain: true });
+    } else {
+      // Not connected right now — queue a one-shot publish on next connect.
+      const once = () => {
+        this.client?.publish(MQTT_TOPICS.admin, payload, { qos: 1, retain: true });
+        this.client?.removeListener('connect', once);
+      };
+      this.client?.on('connect', once);
+    }
   }
 
   /**
@@ -959,6 +995,7 @@ class TelemetryService {
         MQTT_TOPICS.rotatorTelemetry,
         MQTT_TOPICS.sstvStatus,
         MQTT_TOPICS.attendees,
+        MQTT_TOPICS.admin,
       );
       this.client.subscribe(topics, (err) => {
         if (err) {
@@ -976,6 +1013,20 @@ class TelemetryService {
     this.client.on('message', (topic, payload) => {
       this.lastMessageAt = Date.now();
       this.messageCount++;
+      if (topic === MQTT_TOPICS.admin) {
+        try {
+          const msg = JSON.parse(payload.toString());
+          if (msg?.type === 'wipe' && msg.token === CLEAR_TOKEN && Number.isFinite(msg.at)) {
+            const last = Number(localStorage.getItem(LAST_WIPE_KEY) || '0');
+            if (msg.at > last) {
+              try { localStorage.setItem(LAST_WIPE_KEY, String(msg.at)); } catch {}
+              // Local wipe without re-publishing (we're reacting to one).
+              this._doLocalWipe();
+            }
+          }
+        } catch { /* ignore malformed admin payload */ }
+        return;
+      }
       if (topic === MQTT_TOPICS.aprsTelemetry) {
         try {
           const t = normalizeTelemetryPayload(JSON.parse(payload.toString()));

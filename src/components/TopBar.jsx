@@ -9,15 +9,21 @@ import { Radio, Settings, LogOut, Wifi, Activity, Users, Trash2 } from 'lucide-r
 const CLEAR_PASSWORD = 'Chr1stmasVibeBac@r';
 
 function clearAllDataFlow() {
-  const pw = window.prompt('Clear ALL local mission data on this browser?\n\nThis wipes flight history, chat messages, and the Who\'s Watching log stored on this device only — the broker and other viewers are untouched.\n\nEnter password to confirm:');
+  const pw = window.prompt(
+    'Clear ALL mission data for EVERY viewer (current and future)?\n\n' +
+    'This broadcasts a retained wipe command over MQTT. Every browser that\n' +
+    'is currently connected — and any browser that connects later — will\n' +
+    'clear its flight history, chat messages, presence log, and callsigns.\n\n' +
+    'Enter password to confirm:'
+  );
   if (pw === null) return;  // cancelled
   if (pw !== CLEAR_PASSWORD) {
     window.alert('Wrong password. No data was cleared.');
     return;
   }
-  if (!window.confirm('Last chance — clear everything?')) return;
-  telemetry.clearAllLocalData();
-  window.alert('All local mission data cleared.');
+  if (!window.confirm('Last chance — broadcast the wipe to every viewer?')) return;
+  telemetry.clearAllDataEverywhere();
+  window.alert('Wipe broadcast. Every connected (and future) viewer will clear their local data.');
 }
 
 // Freshness thresholds — above STALE_MS the feed is amber; above DEAD_MS red.
