@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Mountain, TrendingUp, TrendingDown, Thermometer, Gauge, Droplets, MapPin, Clock, Radio, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mountain, TrendingUp, TrendingDown, Thermometer, Gauge, Droplets, MapPin, Clock, Radio, ChevronDown, ChevronRight, Calendar } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -170,6 +170,89 @@ const PLOT_LAYOUT_BASE = {
 // 3D flight trajectory — lon / lat / altitude, line coloured by altitude so
 // the burst point (peak) and descent read instantly. Drag to rotate, scroll
 // to zoom, hover for altitude/time at any point.
+// Resolve a range preset / custom pair to [startMs, endMs | Infinity].
+// Live presets slide forward each tick because `end = Date.now()`.
+const RANGE_PRESETS = [
+  { id: 'live-15m', label: 'Live 15m',  windowMs:    15 * 60_000, live: true  },
+  { id: 'live-1h',  label: 'Live 1h',   windowMs:    60 * 60_000, live: true  },
+  { id: 'live-6h',  label: 'Live 6h',   windowMs: 6 * 60 * 60_000, live: true  },
+  { id: 'live-24h', label: 'Live 24h',  windowMs: 24 * 60 * 60_000, live: true },
+  { id: 'all',      label: 'All',       live: true },
+  { id: 'custom',   label: 'Custom',    live: false },
+];
+
+function toLocalInputValue(ms) {
+  if (!ms || !Number.isFinite(ms)) return '';
+  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
+  return d.toISOString().slice(0, 16);
+}
+
+function RangeControl({ history, value, onChange }) {
+  const bounds = useMemo(() => {
+    if (history.length === 0) return null;
+    const ts = history.map((h) => h.t).filter((v) => Number.isFinite(v));
+    if (!ts.length) return null;
+    return { min: Math.min(...ts), max: Math.max(...ts) };
+  }, [history]);
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border/50 bg-background/40 p-2">
+      <Calendar className="ml-1 h-3.5 w-3.5 shrink-0 text-accent" />
+      <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Range</span>
+      <div className="flex flex-wrap items-center gap-1">
+        {RANGE_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onChange({ ...value, mode: p.id })}
+            className={`rounded-md border px-2 py-0.5 text-[10px] font-mono uppercase transition ${
+              value.mode === p.id
+                ? 'border-accent/60 bg-accent/15 text-accent'
+                : 'border-border/50 text-muted-foreground hover:border-accent/40 hover:text-accent'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {value.mode === 'custom' && (
+        <div className="flex flex-wrap items-center gap-1.5 pl-2 border-l border-border/40">
+          <input
+            type="datetime-local"
+            value={toLocalInputValue(value.customStart || bounds?.min)}
+            onChange={(e) => onChange({ ...value, customStart: new Date(e.target.value).getTime() })}
+            className="rounded-md border border-border/50 bg-background/60 px-2 py-0.5 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+          <span className="text-[10px] text-muted-foreground">→</span>
+          <input
+            type="datetime-local"
+            value={toLocalInputValue(value.customEnd || bounds?.max)}
+            onChange={(e) => onChange({ ...value, customEnd: new Date(e.target.value).getTime() })}
+            className="rounded-md border border-border/50 bg-background/60 px-2 py-0.5 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+        </div>
+      )}
+      {bounds && (
+        <span className="ml-auto text-[10px] font-mono text-muted-foreground">
+          data: {new Date(bounds.min).toLocaleString()} → {new Date(bounds.max).toLocaleString()}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function resolveRange(value, bounds) {
+  const now = Date.now();
+  const preset = RANGE_PRESETS.find((p) => p.id === value.mode) || RANGE_PRESETS[0];
+  if (preset.id === 'all') return { start: -Infinity, end: Infinity, live: true };
+  if (preset.id === 'custom') {
+    const start = Number.isFinite(value.customStart) ? value.customStart : (bounds?.min ?? -Infinity);
+    const end   = Number.isFinite(value.customEnd)   ? value.customEnd   : (bounds?.max ?? Infinity);
+    return { start, end, live: false };
+  }
+  // Live sliding window ending now.
+  return { start: now - preset.windowMs, end: now, live: true };
+}
+
 function Trajectory3D({ history }) {
   const points = useMemo(
     () => history.filter((h) =>
@@ -320,7 +403,21 @@ export default function LuminaDetail({ cube }) {
 
   const hasT = !!cube.telemetry;
   const t = cube.telemetry || {};
-  const history = cube.history || [];
+  const fullHistory = cube.history || [];
+
+  // Date-range picker: live sliding windows re-tick each render, so new
+  // packets flow in automatically when a live preset is active.
+  const [range, setRange] = useState({ mode: 'all', customStart: null, customEnd: null });
+  const bounds = useMemo(() => {
+    if (fullHistory.length === 0) return null;
+    const ts = fullHistory.map((h) => h.t).filter((v) => Number.isFinite(v));
+    return ts.length ? { min: Math.min(...ts), max: Math.max(...ts) } : null;
+  }, [fullHistory]);
+  const resolved = resolveRange(range, bounds);
+  const history = useMemo(
+    () => fullHistory.filter((h) => Number.isFinite(h.t) && h.t >= resolved.start && h.t <= resolved.end),
+    [fullHistory, resolved.start, resolved.end],
+  );
 
   // Every packet with coordinates — plotted on the map.
   const trackPoints = useMemo(
@@ -372,6 +469,9 @@ export default function LuminaDetail({ cube }) {
         </div>
       )}
       <>
+          {/* Date-range selector — drives map, 3D trajectory & graphs. */}
+          <RangeControl history={fullHistory} value={range} onChange={setRange} />
+
           {/* Hero stats */}
           <div className="mb-4 flex flex-wrap items-end gap-6">
             <div>
