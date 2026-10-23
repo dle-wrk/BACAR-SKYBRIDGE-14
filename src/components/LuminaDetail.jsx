@@ -4,11 +4,11 @@ import { MapContainer, TileLayer, Marker, Polyline, Popup } from 'react-leaflet'
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import createPlotlyComponent from 'react-plotly.js/factory';
-import Plotly from 'plotly.js-basic-dist-min';
+import Plotly from 'plotly.js-dist-min';
 import { telemetry } from '@/lib/mqttService';
 
-// Hand-wire react-plotly.js against the "basic" bundle (scatter/line/bar only)
-// so we pull in ~1 MB instead of the full ~4 MB plotly build.
+// Full plotly bundle so we get both the 2D line charts and the 3D
+// trajectory scatter3d (gl3d module) in one place.
 const Plot = createPlotlyComponent(Plotly);
 
 // Fix default marker icons (Vite doesn't bundle Leaflet's default PNGs).
@@ -166,6 +166,106 @@ const PLOT_LAYOUT_BASE = {
   },
   showlegend: false,
 };
+
+// 3D flight trajectory — lon / lat / altitude, line coloured by altitude so
+// the burst point (peak) and descent read instantly. Drag to rotate, scroll
+// to zoom, hover for altitude/time at any point.
+function Trajectory3D({ history }) {
+  const points = useMemo(
+    () => history.filter((h) =>
+      typeof h.latitude === 'number' && Number.isFinite(h.latitude) &&
+      typeof h.longitude === 'number' && Number.isFinite(h.longitude) &&
+      typeof h.altitude_m === 'number' && Number.isFinite(h.altitude_m),
+    ),
+    [history],
+  );
+  if (points.length < 2) {
+    return (
+      <div className="mb-5 rounded-xl border border-border/50 bg-background/40 p-3">
+        <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          3D Trajectory · altitude vs lat/lon
+        </div>
+        <div className="py-10 text-center text-xs text-muted-foreground">
+          Collecting GPS fixes… need at least two with coordinates + altitude.
+        </div>
+      </div>
+    );
+  }
+  const trace = {
+    type: 'scatter3d',
+    mode: 'lines+markers',
+    x: points.map((p) => p.longitude),
+    y: points.map((p) => p.latitude),
+    z: points.map((p) => p.altitude_m / 1000),
+    line: { width: 4, color: points.map((p) => p.altitude_m / 1000), colorscale: 'Viridis', showscale: true,
+            colorbar: { title: { text: 'km', font: { color: 'hsl(215 25% 65%)', size: 10 } }, tickfont: { color: 'hsl(215 25% 65%)', size: 9 }, thickness: 10, len: 0.7 } },
+    marker: { size: 2, color: points.map((p) => p.altitude_m / 1000), colorscale: 'Viridis', opacity: 0.85 },
+    hovertemplate: 'lat %{y:.4f}<br>lon %{x:.4f}<br>alt %{z:.2f} km<extra></extra>',
+    name: 'Trajectory',
+  };
+  const peak = points.reduce((m, p) => (p.altitude_m > (m?.altitude_m ?? -Infinity) ? p : m), points[0]);
+  const peakMarker = {
+    type: 'scatter3d', mode: 'markers',
+    x: [peak.longitude], y: [peak.latitude], z: [peak.altitude_m / 1000],
+    marker: { size: 6, color: '#f59e0b', symbol: 'diamond', line: { color: '#111', width: 1 } },
+    hovertemplate: `Peak ${(peak.altitude_m / 1000).toFixed(2)} km<extra></extra>`,
+    name: 'Peak',
+    showlegend: false,
+  };
+  const latest = points[points.length - 1];
+  const latestMarker = {
+    type: 'scatter3d', mode: 'markers',
+    x: [latest.longitude], y: [latest.latitude], z: [latest.altitude_m / 1000],
+    marker: { size: 6, color: '#38bdf8', symbol: 'circle', line: { color: '#111', width: 1 } },
+    hovertemplate: `Latest ${(latest.altitude_m / 1000).toFixed(2)} km<extra></extra>`,
+    name: 'Latest',
+    showlegend: false,
+  };
+  const axisStyle = {
+    gridcolor: 'hsl(225 35% 20%)',
+    zerolinecolor: 'hsl(225 35% 25%)',
+    tickfont: { color: 'hsl(215 25% 65%)', size: 9 },
+    titlefont: { color: 'hsl(215 25% 65%)', size: 10 },
+    backgroundcolor: 'rgba(0,0,0,0)',
+    showbackground: true,
+  };
+  return (
+    <div className="mb-5 overflow-hidden rounded-xl border border-border/50 bg-background/40">
+      <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          3D Trajectory · {points.length} fixes · peak {(peak.altitude_m / 1000).toFixed(2)} km
+        </div>
+        <div className="text-[10px] font-mono text-muted-foreground">drag · scroll · hover</div>
+      </div>
+      <div style={{ height: 420 }}>
+        <Plot
+          data={[trace, peakMarker, latestMarker]}
+          layout={{
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor:  'rgba(0,0,0,0)',
+            margin: { l: 0, r: 0, t: 0, b: 0 },
+            scene: {
+              xaxis: { ...axisStyle, title: { text: 'Longitude' } },
+              yaxis: { ...axisStyle, title: { text: 'Latitude'  } },
+              zaxis: { ...axisStyle, title: { text: 'Altitude (km)' } },
+              aspectmode: 'auto',
+              camera: { eye: { x: 1.4, y: 1.4, z: 0.9 } },
+              bgcolor: 'rgba(0,0,0,0)',
+            },
+            hoverlabel: {
+              bgcolor: 'hsl(226 47% 7%)', bordercolor: 'hsl(225 35% 20%)',
+              font: { size: 11, color: '#e2e8f0', family: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+            },
+            showlegend: false,
+          }}
+          config={{ displaylogo: false, responsive: true, displayModeBar: 'hover' }}
+          useResizeHandler
+          style={{ width: '100%', height: '100%' }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function Graph({ title, data, dataKey, unit = '', color = '#38bdf8' }) {
   const visible = useMemo(
@@ -343,6 +443,9 @@ export default function LuminaDetail({ cube }) {
               </MapContainer>
             </div>
           </div>
+
+          {/* 3D flight trajectory */}
+          <Trajectory3D history={history} />
 
           {/* Graphs */}
           <div className="grid gap-3 sm:grid-cols-2">
