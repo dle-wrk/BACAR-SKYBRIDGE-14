@@ -75,7 +75,11 @@ const LAST_TELEMETRY_KEY = 'bacar_last_telemetry_v1';
 // needing the gateway online. Only plot-relevant numeric fields are kept, to
 // stay well under the 5-10 MB localStorage quota even for multi-hour flights.
 const FLIGHT_HISTORY_KEY = 'bacar_flight_history_v1';
-const FLIGHT_HISTORY_CAP = 20000; // ~27h at 5s cadence
+// Hard cap on in-memory history. 1 M at ~150 B/entry = ~150 MB JSON which
+// WILL overflow localStorage (typical quota 5-10 MB) — the quota-halving
+// fallback in _schedulePersistHistory() progressively prunes the stored
+// series to fit, so the in-memory copy is always the richest view.
+const FLIGHT_HISTORY_CAP = 1_000_000;
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 const HISTORY_MAX = FLIGHT_HISTORY_CAP; // in-memory history matches the persisted cap
 const NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
