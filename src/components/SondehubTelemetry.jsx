@@ -145,8 +145,8 @@ function SondehubTrajectoryTabs() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Add callsign…"
-            maxLength={10}
-            className="w-32 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs font-mono uppercase text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
+            maxLength={50}
+            className="w-56 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs font-mono uppercase text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
           />
           <button
             type="submit"
@@ -359,7 +359,7 @@ export default function SondehubTelemetry() {
             value={newCs}
             onChange={(e) => setNewCs(e.target.value)}
             placeholder="Add callsign (e.g. ZS6ABC)"
-            maxLength={10}
+            maxLength={50}
             className="rounded-lg border border-border/60 bg-background/60 px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40"
           />
           <button
@@ -376,7 +376,7 @@ export default function SondehubTelemetry() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search SondeHub"
-            maxLength={10}
+            maxLength={50}
             className="rounded-lg border border-border/60 bg-background/60 px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/40"
           />
           <button
