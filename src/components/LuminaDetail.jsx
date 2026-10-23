@@ -3,8 +3,13 @@ import { Mountain, TrendingUp, TrendingDown, Thermometer, Gauge, Droplets, MapPi
 import { MapContainer, TileLayer, Marker, Polyline, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import createPlotlyComponent from 'react-plotly.js/factory';
+import Plotly from 'plotly.js-basic-dist-min';
 import { telemetry } from '@/lib/mqttService';
+
+// Hand-wire react-plotly.js against the "basic" bundle (scatter/line/bar only)
+// so we pull in ~1 MB instead of the full ~4 MB plotly build.
+const Plot = createPlotlyComponent(Plotly);
 
 // Fix default marker icons (Vite doesn't bundle Leaflet's default PNGs).
 delete L.Icon.Default.prototype._getIconUrl;
@@ -120,8 +125,50 @@ function RawTelemetry({ t }) {
   );
 }
 
+// Shared Plotly config — dark theme, draggable/zoomable, no watermark.
+const PLOT_CONFIG = {
+  displaylogo: false,
+  responsive: true,
+  modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'toggleSpikelines'],
+  displayModeBar: 'hover',
+};
+const PLOT_LAYOUT_BASE = {
+  paper_bgcolor: 'rgba(0,0,0,0)',
+  plot_bgcolor:  'rgba(0,0,0,0)',
+  font: { family: 'ui-monospace, SFMono-Regular, Menlo, monospace', size: 10, color: 'hsl(215 25% 65%)' },
+  margin: { l: 50, r: 16, t: 8, b: 32 },
+  xaxis: {
+    type: 'date',
+    gridcolor: 'hsl(225 35% 20%)',
+    linecolor: 'hsl(225 35% 20%)',
+    tickfont: { size: 10, color: 'hsl(215 25% 65%)' },
+    showspikes: true,
+    spikemode: 'across',
+    spikethickness: 1,
+    spikecolor: 'hsl(215 25% 45%)',
+    spikedash: 'dot',
+  },
+  yaxis: {
+    gridcolor: 'hsl(225 35% 20%)',
+    linecolor: 'hsl(225 35% 20%)',
+    tickfont: { size: 10, color: 'hsl(215 25% 65%)' },
+    zeroline: false,
+  },
+  hoverlabel: {
+    bgcolor: 'hsl(226 47% 7%)',
+    bordercolor: 'hsl(225 35% 20%)',
+    font: { size: 11, color: '#e2e8f0', family: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+  },
+  showlegend: false,
+};
+
 function Graph({ title, data, dataKey, unit = '', color = '#38bdf8' }) {
-  const visible = data.filter((d) => typeof d[dataKey] === 'number' && Number.isFinite(d[dataKey]));
+  const visible = useMemo(
+    () => data.filter((d) => typeof d[dataKey] === 'number' && Number.isFinite(d[dataKey])),
+    [data, dataKey],
+  );
+  const latest = visible.length ? visible[visible.length - 1][dataKey] : null;
+
   if (visible.length < 2) {
     return (
       <div className="rounded-xl border border-border/50 bg-background/40 p-3">
@@ -130,53 +177,34 @@ function Graph({ title, data, dataKey, unit = '', color = '#38bdf8' }) {
       </div>
     );
   }
+
+  const trace = {
+    x: visible.map((d) => new Date(d.t)),
+    y: visible.map((d) => d[dataKey]),
+    type: 'scatter',
+    mode: 'lines',
+    line: { color, width: 2, shape: 'spline', smoothing: 0.6 },
+    fill: 'tozeroy',
+    fillcolor: `${color}18`,  // ~9% alpha hex
+    hovertemplate: `%{y} ${unit}<br>%{x|%H:%M:%S}<extra></extra>`,
+    name: title,
+  };
+
   return (
     <div className="rounded-xl border border-border/50 bg-background/40 p-3">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</div>
         <div className="font-mono text-xs text-muted-foreground">
-          {visible[visible.length - 1][dataKey]} {unit}
+          {Number.isFinite(latest) ? (Number.isInteger(latest) ? latest : latest.toFixed(2)) : '--'} {unit}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={160}>
-        <LineChart data={visible} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-          <CartesianGrid stroke="hsl(225 35% 20%)" strokeDasharray="3 3" />
-          <XAxis
-            dataKey="t"
-            type="number"
-            scale="time"
-            domain={['dataMin', 'dataMax']}
-            tickFormatter={(t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            tick={{ fill: 'hsl(215 25% 65%)', fontSize: 10 }}
-            stroke="hsl(225 35% 20%)"
-            minTickGap={40}
-          />
-          <YAxis
-            tick={{ fill: 'hsl(215 25% 65%)', fontSize: 10 }}
-            stroke="hsl(225 35% 20%)"
-            width={48}
-            tickFormatter={(v) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)}
-          />
-          <Tooltip
-            contentStyle={{
-              background: 'hsl(226 47% 7%)',
-              border: '1px solid hsl(225 35% 20%)',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-            labelFormatter={(t) => new Date(t).toLocaleTimeString()}
-            formatter={(v) => [`${v} ${unit}`, title]}
-          />
-          <Line
-            type="monotone"
-            dataKey={dataKey}
-            stroke={color}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <Plot
+        data={[trace]}
+        layout={{ ...PLOT_LAYOUT_BASE, height: 180 }}
+        config={PLOT_CONFIG}
+        useResizeHandler
+        style={{ width: '100%', height: 180 }}
+      />
     </div>
   );
 }
