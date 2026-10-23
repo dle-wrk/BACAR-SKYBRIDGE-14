@@ -260,6 +260,18 @@ export default function ChatRoom({ observer }) {
   const stickyRef = useRef(true);
   const [showJumpBtn, setShowJumpBtn] = useState(false);
 
+  // Unread badge on the closed chat bubble. Count only incoming messages
+  // (not our own) that arrived since the chat was last open. When the chat
+  // opens we snapshot the current length as "seen".
+  const [seenCount, setSeenCount] = useState(() => readRoom().messages.length);
+  useEffect(() => {
+    if (open) setSeenCount(messages.length);
+  }, [open, messages.length]);
+  const unreadCount = open ? 0 : messages
+    .slice(seenCount)
+    .filter((m) => m.username !== currentUserName)
+    .length;
+
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -371,14 +383,22 @@ export default function ChatRoom({ observer }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="ml-auto flex items-center gap-2 rounded-full border border-accent/40 bg-card px-4 py-3 text-sm font-semibold text-foreground shadow-2xl shadow-black/40 transition hover:border-accent hover:text-accent"
-          aria-label="Open mission chat"
+          className="relative ml-auto flex items-center gap-2 rounded-full border border-accent/40 bg-card px-4 py-3 text-sm font-semibold text-foreground shadow-2xl shadow-black/40 transition hover:border-accent hover:text-accent"
+          aria-label={unreadCount > 0 ? `Open mission chat (${unreadCount} unread)` : 'Open mission chat'}
         >
           <MessageSquareText className="h-4 w-4 text-accent" />
           Mission Chat
           <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
             {visibleUsers.length}
           </span>
+          {unreadCount > 0 && (
+            <span
+              className="absolute -top-1.5 -right-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-lg ring-2 ring-background animate-pulse"
+              aria-live="polite"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
         </button>
       ) : (
         <aside className="strat-card flex h-[min(70vh,620px)] w-full flex-col rounded-2xl border border-border/50 p-4 shadow-2xl shadow-black/50">
