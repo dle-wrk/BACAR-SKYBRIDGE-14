@@ -70,8 +70,14 @@ const BROKER_KEY = 'bacar_broker_url_v1';
 // last known state even when the gateway is currently offline. Capped at ~16 KB
 // per cube — only the latest packet is kept.
 const LAST_TELEMETRY_KEY = 'bacar_last_telemetry_v1';
+// Persisted compact flight history per cube (one slim entry per packet) so
+// cold loads can rebuild the whole trajectory + time-series graphs without
+// needing the gateway online. Only plot-relevant numeric fields are kept, to
+// stay well under the 5-10 MB localStorage quota even for multi-hour flights.
+const FLIGHT_HISTORY_KEY = 'bacar_flight_history_v1';
+const FLIGHT_HISTORY_CAP = 20000; // ~27h at 5s cadence
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
-const HISTORY_MAX = 180; // ~15 min at 5s cadence
+const HISTORY_MAX = FLIGHT_HISTORY_CAP; // in-memory history matches the persisted cap
 const NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
 
 /**
@@ -241,18 +247,32 @@ class TelemetryService {
       try { return JSON.parse(localStorage.getItem(LAST_TELEMETRY_KEY) || '{}') || {}; }
       catch { return {}; }
     })();
+    // Rehydrate compact flight history (lat/lon/alt/etc per packet) so the
+    // 3D trajectory + time-series graphs come back on cold load.
+    const persistedHistory = (() => {
+      try { return JSON.parse(localStorage.getItem(FLIGHT_HISTORY_KEY) || '{}') || {}; }
+      catch { return {}; }
+    })();
     this.cubes = CUBE_CONFIGS.map((c) => {
       const saved = persisted[c.id] || null;
+      const savedHist = Array.isArray(persistedHistory[c.id]) ? persistedHistory[c.id] : [];
+      // If we have a last-known packet but no history, seed with the single packet
+      // so stat tiles render. Otherwise prefer the real stored trajectory.
+      const history = savedHist.length > 0 ? savedHist : (saved ? [saved] : []);
       return {
         ...c,
         mode: c.mode || 'full_telemetry',
         cameraConfig: c.cameraConfig || { count: 0, imageCounter: 0, videoCounter: 0 },
         profile: { ...c.profile },
-        telemetry: saved,              // may be null
-        history: saved ? [saved] : [], // seed with one point so stat tiles render
+        telemetry: saved,
+        history,
         images: [],
       };
     });
+    // Throttle writes — large histories to localStorage are expensive if done
+    // on every single packet. 2-second coalescing is more than enough since
+    // packets land every ~5 s and the browser can crunch 10k+ entries easily.
+    this._historyPersistTimer = null;
     // Legacy single-latest slots (preserved for anything still reading them).
     this.aprsTelemetry = null;
     this.sondehubTelemetry = null;
@@ -748,6 +768,57 @@ class TelemetryService {
       for (const c of this.cubes) if (c.telemetry) snap[c.id] = c.telemetry;
       localStorage.setItem(LAST_TELEMETRY_KEY, JSON.stringify(snap));
     } catch { /* quota / private mode */ }
+    this._schedulePersistHistory();
+  }
+
+  // Debounced write of the compact flight history. Only plot-relevant fields
+  // are kept per entry so the whole flight stays well under the ~5 MB quota.
+  _schedulePersistHistory() {
+    if (this._historyPersistTimer) return;
+    this._historyPersistTimer = setTimeout(() => {
+      this._historyPersistTimer = null;
+      try {
+        const snap = {};
+        for (const c of this.cubes) {
+          if (!c.history || c.history.length === 0) continue;
+          snap[c.id] = c.history.map((p) => ({
+            t: p.t,
+            latitude: p.latitude, longitude: p.longitude,
+            altitude_m: p.altitude_m,
+            temperature_c: p.temperature_c,
+            pressure_hpa: p.pressure_hpa,
+            humidity_pct: p.humidity_pct ?? p.humidity,
+            speed_ms: p.speed_ms,
+            vertical_speed_ms: p.vertical_speed_ms,
+            heading_deg: p.heading_deg,
+            battery_v: p.battery_v,
+            rssi_dbm: p.rssi_dbm,
+            snr_db: p.snr_db,
+          }));
+        }
+        localStorage.setItem(FLIGHT_HISTORY_KEY, JSON.stringify(snap));
+      } catch {
+        // Quota blown — halve every cube's history and try once more.
+        try {
+          for (const c of this.cubes) {
+            if (c.history && c.history.length > 1000) {
+              c.history = c.history.filter((_, i) => i % 2 === 0);
+            }
+          }
+          const snap = {};
+          for (const c of this.cubes) if (c.history?.length) snap[c.id] = c.history;
+          localStorage.setItem(FLIGHT_HISTORY_KEY, JSON.stringify(snap));
+        } catch { /* give up — in-memory data is still intact */ }
+      }
+    }, 2000);
+  }
+
+  // Public: let the UI clear the stored flight history (e.g. between flights
+  // so Project A's trajectory doesn't haunt Project B).
+  clearFlightHistory() {
+    for (const c of this.cubes) c.history = c.telemetry ? [c.telemetry] : [];
+    try { localStorage.removeItem(FLIGHT_HISTORY_KEY); } catch {}
+    this._emit();
   }
 
   /**
