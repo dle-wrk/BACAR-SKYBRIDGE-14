@@ -76,7 +76,12 @@ function formatValue(v) {
 function RawTelemetry({ t }) {
   const [open, setOpen] = useState(false);
   const groups = useMemo(() => {
-    if (!t) return [];
+    if (!t || typeof t !== 'object' || Object.keys(t).length === 0) {
+      // No packet yet — surface the whole schema so viewers see what's coming.
+      return FIELD_GROUPS
+        .map((g) => ({ title: g.title, rows: g.keys.filter((k) => !HERO_KEYS.has(k)).map((k) => [k, undefined]) }))
+        .filter((g) => g.rows.length > 0);
+    }
     const seen = new Set(HERO_KEYS);
     const result = FIELD_GROUPS.map((g) => {
       const rows = g.keys
@@ -213,7 +218,8 @@ export default function LuminaDetail({ cube }) {
   const [, setTick] = useState(0);
   useEffect(() => telemetry.subscribe(() => setTick((t) => t + 1)), []);
 
-  const t = cube.telemetry;
+  const hasT = !!cube.telemetry;
+  const t = cube.telemetry || {};
   const history = cube.history || [];
 
   // Every packet with coordinates — plotted on the map.
@@ -237,12 +243,12 @@ export default function LuminaDetail({ cube }) {
       <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
         <div>
           <div className="flex items-center gap-2">
-            <span className={`h-1.5 w-1.5 rounded-full ${t ? 'bg-emerald-400 live-dot' : 'bg-muted-foreground'}`} />
+            <span className={`h-1.5 w-1.5 rounded-full ${hasT ? 'bg-emerald-400 live-dot' : 'bg-muted-foreground'}`} />
             <span className="font-mono text-xs text-muted-foreground">{cube.id}</span>
           </div>
           <h2 className="mt-0.5 font-heading text-xl font-bold sm:text-2xl">{cube.name}</h2>
         </div>
-        {t && (
+        {hasT && (
           <div className="text-right text-[10px] font-mono text-muted-foreground">
             <div className="flex items-center justify-end gap-1.5">
               <Clock className="h-3 w-3" /> UTC {times.utc}
@@ -254,13 +260,18 @@ export default function LuminaDetail({ cube }) {
         )}
       </div>
 
-      {!t ? (
-        <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+      {!hasT && (
+        <div className="mb-4 rounded-xl border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
           <Radio className="mx-auto mb-2 h-5 w-5 opacity-40" />
-          Awaiting telemetry on <code className="font-mono text-xs">{cube.telemetryTopic}</code>…
+          No telemetry on <code className="font-mono text-[11px]">{cube.telemetryTopic}</code> yet — fields below show the structure.
         </div>
-      ) : (
-        <>
+      )}
+      {hasT && typeof t.t === 'number' && (Date.now() - t.t) > 60_000 && (
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[10px] font-mono uppercase text-amber-300">
+          Stale · last packet {Math.round((Date.now() - t.t) / 60_000)} min ago
+        </div>
+      )}
+      <>
           {/* Hero stats */}
           <div className="mb-4 flex flex-wrap items-end gap-6">
             <div>
@@ -345,8 +356,7 @@ export default function LuminaDetail({ cube }) {
 
           {/* Raw dump — every field on the live packet, auto-updating. */}
           <RawTelemetry t={t} />
-        </>
-      )}
+      </>
     </section>
   );
 }

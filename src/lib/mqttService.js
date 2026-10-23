@@ -66,6 +66,10 @@ export const CALLSIGN_CARDS  = ['zr6ljk', 'zr6ljk-6'];
 export const USER_CALLSIGNS_KEY = 'bacar_user_callsigns_v1';
 
 const BROKER_KEY = 'bacar_broker_url_v1';
+// Persisted last telemetry packet per cube id, so returning viewers see the
+// last known state even when the gateway is currently offline. Capped at ~16 KB
+// per cube — only the latest packet is kept.
+const LAST_TELEMETRY_KEY = 'bacar_last_telemetry_v1';
 const DEFAULT_BROKER_URL = 'wss://broker.emqx.io:8084/mqtt';
 const HISTORY_MAX = 180; // ~15 min at 5s cadence
 const NRF_IMAGE_SCHEMA = 'bacar.nrf.image.v1';
@@ -231,15 +235,24 @@ function normalizeTelemetryPayload(payload) {
 
 class TelemetryService {
   constructor() {
-    this.cubes = CUBE_CONFIGS.map((c) => ({
-      ...c,
-      mode: c.mode || 'full_telemetry',
-      cameraConfig: c.cameraConfig || { count: 0, imageCounter: 0, videoCounter: 0 },
-      profile: { ...c.profile },
-      telemetry: null,
-      history: [],
-      images: [],
-    }));
+    // Rehydrate last-known telemetry per cube id so a cold page load after
+    // the gateway went quiet still shows the final recorded state.
+    const persisted = (() => {
+      try { return JSON.parse(localStorage.getItem(LAST_TELEMETRY_KEY) || '{}') || {}; }
+      catch { return {}; }
+    })();
+    this.cubes = CUBE_CONFIGS.map((c) => {
+      const saved = persisted[c.id] || null;
+      return {
+        ...c,
+        mode: c.mode || 'full_telemetry',
+        cameraConfig: c.cameraConfig || { count: 0, imageCounter: 0, videoCounter: 0 },
+        profile: { ...c.profile },
+        telemetry: saved,              // may be null
+        history: saved ? [saved] : [], // seed with one point so stat tiles render
+        images: [],
+      };
+    });
     // Legacy single-latest slots (preserved for anything still reading them).
     this.aprsTelemetry = null;
     this.sondehubTelemetry = null;
@@ -723,7 +736,18 @@ class TelemetryService {
     cube.telemetry = point;
     cube.history = [...cube.history, point].slice(-HISTORY_MAX);
     this._detectBurst(cube, prev, point);
+    this._persistLastTelemetry();
     this._emit();
+  }
+
+  // Write the latest packet for every cube to localStorage. Fire-and-forget;
+  // quota errors are swallowed so a near-full disk doesn't break ingestion.
+  _persistLastTelemetry() {
+    try {
+      const snap = {};
+      for (const c of this.cubes) if (c.telemetry) snap[c.id] = c.telemetry;
+      localStorage.setItem(LAST_TELEMETRY_KEY, JSON.stringify(snap));
+    } catch { /* quota / private mode */ }
   }
 
   /**
