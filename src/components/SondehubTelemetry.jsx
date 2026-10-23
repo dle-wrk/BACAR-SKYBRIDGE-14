@@ -4,6 +4,7 @@ import { telemetry } from '@/lib/mqttService';
 import { CALLSIGN_CARDS, CALLSIGN_PREFIX } from '@/lib/mqttService';
 import { useUserCallsigns } from '@/lib/useUserCallsigns';
 import { fetchLatestForCallsigns, fetchSondehubHistory } from '@/lib/sondehubApi';
+import { fetchSondeHistory } from '@/lib/sondesApi';
 import Trajectory3D from '@/components/Trajectory3D';
 
 const TRAJECTORY_WINDOWS = [
@@ -172,6 +173,182 @@ function SondehubTrajectoryTabs() {
 
       <div className="mt-1 text-[10px] text-muted-foreground">
         Pulls last {TRAJECTORY_WINDOWS.find((w) => w.hours === window)?.label} of SondeHub frames, refreshed every {TRAJECTORY_REFRESH_MS / 1000}s.
+        {activeState.at && ` · last pull ${Math.max(0, Math.round((Date.now() - activeState.at) / 1000))}s ago`}
+      </div>
+    </div>
+  );
+}
+
+const SONDE_TRAJ_LS_KEY = 'bacar_sondes_trajectory_v1';
+
+// 3D trajectory for PROFESSIONAL radiosondes — the ones with a URL like
+// https://sondehub.org/<serial>. The sonde endpoint is serial-keyed and
+// different from the amateur one, so this is its own section with its own
+// localStorage key. Each viewer's list is local to their session.
+function SondeTrajectoryTabs() {
+  const [serials, setSerials] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SONDE_TRAJ_LS_KEY) || '[]');
+      return Array.isArray(saved) && saved.length > 0 ? saved : [];
+    } catch { return []; }
+  });
+  const [active, setActive] = useState(() => serials[0] || '');
+  const [draft, setDraft] = useState('');
+  const [histories, setHistories] = useState({});
+  const timersRef = useRef({});
+
+  useEffect(() => {
+    try { localStorage.setItem(SONDE_TRAJ_LS_KEY, JSON.stringify(serials)); }
+    catch { /* quota */ }
+  }, [serials]);
+
+  useEffect(() => {
+    if (!active && serials.length) setActive(serials[0]);
+    if (active && !serials.includes(active)) setActive(serials[0] || '');
+  }, [serials, active]);
+
+  useEffect(() => {
+    let cancelled = false;
+    for (const t of Object.values(timersRef.current)) clearInterval(t);
+    timersRef.current = {};
+    for (const serial of serials) {
+      const key = serial.toLowerCase();
+      const pull = async () => {
+        setHistories((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), loading: true, error: null } }));
+        try {
+          const frames = await fetchSondeHistory(serial);
+          if (cancelled) return;
+          setHistories((prev) => ({ ...prev, [key]: { frames, loading: false, error: null, at: Date.now() } }));
+        } catch (exc) {
+          if (cancelled) return;
+          setHistories((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), loading: false, error: exc?.message || String(exc) } }));
+        }
+      };
+      pull();
+      timersRef.current[key] = setInterval(pull, TRAJECTORY_REFRESH_MS);
+    }
+    return () => {
+      cancelled = true;
+      for (const t of Object.values(timersRef.current)) clearInterval(t);
+      timersRef.current = {};
+    };
+  }, [serials.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAdd = (e) => {
+    e.preventDefault();
+    // Accept either a bare serial ("X2642772") or a sondehub.org URL;
+    // extract the last path segment as the serial.
+    let s = draft.trim();
+    if (/^https?:/i.test(s)) {
+      try {
+        const u = new URL(s);
+        const parts = u.pathname.split('/').filter(Boolean);
+        s = parts[parts.length - 1] || '';
+      } catch { /* keep whatever they typed */ }
+    }
+    s = s.toUpperCase();
+    if (!s) return;
+    if (!serials.map((x) => x.toUpperCase()).includes(s)) {
+      setSerials([...serials, s]);
+    }
+    setActive(s);
+    setDraft('');
+  };
+  const handleRemove = (serial) => setSerials(serials.filter((x) => x !== serial));
+
+  const activeHistory = histories[active?.toLowerCase?.() || '']?.frames || [];
+  const activeState = histories[active?.toLowerCase?.() || ''] || {};
+
+  return (
+    <div className="mb-6 rounded-2xl border border-border/60 bg-background/40 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="rounded-md bg-accent/10 p-1.5 text-accent">
+            <Box className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 className="font-heading font-semibold">Radiosondes</h3>
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+              any sondehub.org serial · one tab each · session-local list
+            </div>
+          </div>
+        </div>
+        <a
+          href="https://sondehub.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-background/40 px-2.5 py-1 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+        >
+          sondehub.org
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {serials.map((serial) => {
+          const key = serial.toLowerCase();
+          const h = histories[key];
+          const isActive = serial === active;
+          return (
+            <div
+              key={serial}
+              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-mono uppercase transition ${
+                isActive
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-border/50 bg-background/40 text-muted-foreground hover:border-accent/40 hover:text-accent'
+              }`}
+            >
+              <button type="button" onClick={() => setActive(serial)}>
+                {serial}{h?.loading ? ' …' : h?.frames ? ` · ${h.frames.length}` : ''}
+              </button>
+              <a
+                href={`https://sondehub.org/${encodeURIComponent(serial)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`Open ${serial} on sondehub.org`}
+                className="rounded px-0.5 text-muted-foreground transition hover:text-accent"
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
+              <button type="button" onClick={() => handleRemove(serial)} title="Remove" className="rounded hover:text-red-300">
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+        <form onSubmit={handleAdd} className="inline-flex items-center gap-1">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Serial or sondehub.org URL…"
+            maxLength={100}
+            className="w-72 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs font-mono uppercase text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-secondary/60 px-2 py-1 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+          </button>
+        </form>
+      </div>
+
+      {!active ? (
+        <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-xs text-muted-foreground">
+          Enter a radiosonde serial (e.g. <code className="font-mono">X2642772</code>) or paste a <code>sondehub.org/&lt;serial&gt;</code> URL.
+        </div>
+      ) : activeState.error ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 text-xs text-red-300">
+          Fetch failed for {active}: {activeState.error}
+        </div>
+      ) : (
+        <Trajectory3D history={activeHistory} label={`${active} trajectory`} height={460} />
+      )}
+
+      <div className="mt-1 text-[10px] text-muted-foreground">
+        Pulls each sonde&apos;s recent history from api.v2.sondehub.org/sonde/&lt;serial&gt;, refreshed every {TRAJECTORY_REFRESH_MS / 1000}s.
         {activeState.at && ` · last pull ${Math.max(0, Math.round((Date.now() - activeState.at) / 1000))}s ago`}
       </div>
     </div>
@@ -401,6 +578,10 @@ export default function SondehubTelemetry() {
 
       {/* Standalone 3D trajectory tabs — one tab per callsign, add any callsign. */}
       <SondehubTrajectoryTabs />
+
+      {/* Professional radiosondes (sondehub.org/<serial>) — separate endpoint,
+          separate storage, own tab list per viewer. */}
+      <SondeTrajectoryTabs />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {pinned.map((cs) => (
