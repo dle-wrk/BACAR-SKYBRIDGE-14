@@ -164,8 +164,8 @@ export default function TopBar({ observer, onSignOut, onOpenSettings, activeFeed
         {[
           { id: 'aprs',     label: 'APRS' },
           { id: 'sondehub', label: 'SondeHub' },
-          { id: 'pico',     label: 'Pico Balloon', disabled: true },
-          { id: 'rotator',  label: 'Rotator',      disabled: true },
+          { id: 'pico',     label: 'Pico Balloon' },
+          { id: 'rotator',  label: 'Rotator' },
           { id: 'sstv',     label: 'SSTV' },
         ].map((tab) => (
           <button

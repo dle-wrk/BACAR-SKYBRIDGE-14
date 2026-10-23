@@ -9,6 +9,8 @@ import BurstAlerts from '@/components/BurstAlerts';
 import AprsTelemetry from '@/components/AprsTelemetry';
 import SondehubTelemetry from '@/components/SondehubTelemetry';
 import SstvTelemetry from '@/components/SstvTelemetry';
+import PicoBalloonPanel from '@/components/PicoBalloonPanel';
+import RotatorPanel from '@/components/RotatorPanel';
 import { clearObserver, gridToLatLon } from '@/lib/observer';
 import ChatRoom from '@/components/ChatRoom';
 import { Rocket, Satellite } from 'lucide-react';
@@ -97,6 +99,8 @@ export default function MissionControl({ observer, onSignOut }) {
 
         {activeFeed === 'aprs' && <AprsTelemetry />}
         {activeFeed === 'sondehub' && <SondehubTelemetry />}
+        {activeFeed === 'pico' && <PicoBalloonPanel />}
+        {activeFeed === 'rotator' && <RotatorPanel />}
         {activeFeed === 'sstv' && <SstvTelemetry />}
 
         <section className="w-full">
