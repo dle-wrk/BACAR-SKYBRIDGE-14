@@ -1,9 +1,196 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, MapPin, Plus, Radio, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ExternalLink, MapPin, Plus, Radio, Search, X, Box } from 'lucide-react';
 import { telemetry } from '@/lib/mqttService';
 import { CALLSIGN_CARDS, CALLSIGN_PREFIX } from '@/lib/mqttService';
 import { useUserCallsigns } from '@/lib/useUserCallsigns';
-import { fetchLatestAprsForCallsigns } from '@/lib/aprsApi';
+import { fetchLatestAprsForCallsigns, fetchAprsHistory } from '@/lib/aprsApi';
+import Trajectory3D from '@/components/Trajectory3D';
+
+const TRAJECTORY_WINDOWS = [
+  { label: '6h',  hours: 6  },
+  { label: '12h', hours: 12 },
+  { label: '24h', hours: 24 },
+  { label: '3d',  hours: 72 },
+  { label: '7d',  hours: 168 },
+];
+const TRAJECTORY_REFRESH_MS = 60_000;
+
+// Separate standalone section inside the APRS tab. Lets the user enter ANY
+// callsign and view its 3D trajectory from the SondeHub APRS-IS gateway.
+// Each tracked callsign is its own tab; click a tab to switch which one is
+// plotted. History per callsign is cached in state and refreshed every 60 s.
+function AprsTrajectoryTabs() {
+  const [callsigns, setCallsigns] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('bacar_aprs_trajectory_callsigns_v1') || '[]');
+      return Array.isArray(saved) && saved.length > 0 ? saved : ['ZR6LJK-6'];
+    } catch { return ['ZR6LJK-6']; }
+  });
+  const [active, setActive] = useState(() => callsigns[0] || '');
+  const [draft, setDraft] = useState('');
+  const [window, setWindow] = useState(24);
+  const [histories, setHistories] = useState({}); // { callsignLower: { frames, loading, error, at } }
+  const timersRef = useRef({});
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bacar_aprs_trajectory_callsigns_v1', JSON.stringify(callsigns));
+    } catch { /* quota */ }
+  }, [callsigns]);
+
+  // Keep active callsign valid when the list changes.
+  useEffect(() => {
+    if (!active && callsigns.length) setActive(callsigns[0]);
+    if (active && !callsigns.includes(active)) setActive(callsigns[0] || '');
+  }, [callsigns, active]);
+
+  // Fetch + schedule-refresh history for every tracked callsign.
+  useEffect(() => {
+    let cancelled = false;
+    // Clear existing timers.
+    for (const t of Object.values(timersRef.current)) clearInterval(t);
+    timersRef.current = {};
+    for (const cs of callsigns) {
+      const key = cs.toLowerCase();
+      const pull = async () => {
+        setHistories((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), loading: true, error: null } }));
+        try {
+          const frames = await fetchAprsHistory(cs, { durationHours: window });
+          if (cancelled) return;
+          setHistories((prev) => ({ ...prev, [key]: { frames, loading: false, error: null, at: Date.now() } }));
+        } catch (exc) {
+          if (cancelled) return;
+          setHistories((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), loading: false, error: exc?.message || String(exc) } }));
+        }
+      };
+      pull();
+      timersRef.current[key] = setInterval(pull, TRAJECTORY_REFRESH_MS);
+    }
+    return () => {
+      cancelled = true;
+      for (const t of Object.values(timersRef.current)) clearInterval(t);
+      timersRef.current = {};
+    };
+  }, [callsigns.join(','), window]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAdd = (e) => {
+    e.preventDefault();
+    const cs = draft.trim().toUpperCase();
+    if (!cs) return;
+    if (!callsigns.map((c) => c.toUpperCase()).includes(cs)) {
+      setCallsigns([...callsigns, cs]);
+    }
+    setActive(cs);
+    setDraft('');
+  };
+
+  const handleRemove = (cs) => {
+    setCallsigns(callsigns.filter((c) => c !== cs));
+  };
+
+  const activeHistory = histories[active?.toLowerCase?.() || '']?.frames || [];
+  const activeState = histories[active?.toLowerCase?.() || ''] || {};
+
+  return (
+    <div className="mb-6 rounded-2xl border border-border/60 bg-background/40 p-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="rounded-md bg-accent/10 p-1.5 text-accent">
+            <Box className="h-4 w-4" />
+          </div>
+          <div>
+            <h3 className="font-heading font-semibold">3D Trajectory</h3>
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+              any callsign · one tab each · own camera per viewer
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          {TRAJECTORY_WINDOWS.map((w) => (
+            <button
+              key={w.hours}
+              type="button"
+              onClick={() => setWindow(w.hours)}
+              className={`rounded-md border px-2 py-0.5 text-[10px] font-mono uppercase transition ${
+                window === w.hours
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-border/50 text-muted-foreground hover:border-accent/40 hover:text-accent'
+              }`}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Callsign tabs */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {callsigns.map((cs) => {
+          const key = cs.toLowerCase();
+          const h = histories[key];
+          const isActive = cs === active;
+          return (
+            <div
+              key={cs}
+              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-mono uppercase transition ${
+                isActive
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-border/50 bg-background/40 text-muted-foreground hover:border-accent/40 hover:text-accent'
+              }`}
+            >
+              <button type="button" onClick={() => setActive(cs)}>
+                {cs}
+                {h?.loading ? ' …' : h?.frames ? ` · ${h.frames.length}` : ''}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRemove(cs)}
+                title="Remove from trajectory tabs"
+                className="rounded hover:text-red-300"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+        <form onSubmit={handleAdd} className="inline-flex items-center gap-1">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Add callsign…"
+            maxLength={10}
+            className="w-32 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs font-mono uppercase text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/40"
+          />
+          <button
+            type="submit"
+            className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-secondary/60 px-2 py-1 text-xs font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+          </button>
+        </form>
+      </div>
+
+      {!active ? (
+        <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-xs text-muted-foreground">
+          Enter a callsign above to plot its trajectory.
+        </div>
+      ) : activeState.error ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4 text-xs text-red-300">
+          Fetch failed for {active}: {activeState.error}
+        </div>
+      ) : (
+        <Trajectory3D history={activeHistory} label={`${active} trajectory`} height={460} />
+      )}
+
+      <div className="mt-1 text-[10px] text-muted-foreground">
+        Pulls last {TRAJECTORY_WINDOWS.find((w) => w.hours === window)?.label} of APRS frames from the SondeHub APRS-IS gateway, refreshed every {TRAJECTORY_REFRESH_MS / 1000}s.
+        {activeState.at && ` · last pull ${Math.max(0, Math.round((Date.now() - activeState.at) / 1000))}s ago`}
+      </div>
+    </div>
+  );
+}
 
 // Match SondehubTelemetry's cadence — the SondeHub APRS gateway relays
 // APRS-IS traffic in near-real time; polling faster than ~30 s is wasteful.
@@ -235,6 +422,9 @@ export default function AprsTelemetry() {
           <ExternalLink className="h-3 w-3" />
         </a>
       </div>
+
+      {/* Standalone 3D trajectory tabs — one tab per callsign, add any callsign. */}
+      <AprsTrajectoryTabs />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {pinned.map((cs) => (

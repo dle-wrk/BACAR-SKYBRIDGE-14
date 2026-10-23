@@ -84,6 +84,39 @@ export async function fetchLatestAprsForCallsigns(callsigns, opts = {}) {
   return out;
 }
 
+/**
+ * Fetch every APRS frame (newest-first) for a single callsign within the
+ * window. Used by the 3D trajectory tabs — the per-card view in the APRS
+ * panel still uses fetchLatestAprsForCallsigns for just the newest fix.
+ * @param {string} callsign
+ * @param {{ durationHours?: number }} [opts]
+ * @returns {Promise<any[]>}
+ */
+export async function fetchAprsHistory(callsign, opts = {}) {
+  const cs = String(callsign || '').trim();
+  if (!cs) return [];
+  const label = closestDurationLabel(Math.max(1, Math.min(7 * 24, opts.durationHours ?? 24)));
+  const url = `${BASE}?payload_callsign=${encodeURIComponent(cs.toUpperCase())}&duration=${label}`;
+  const resp = await fetch(url, { headers: { 'accept': 'application/json' } });
+  if (!resp.ok) throw new Error(`aprs history ${cs}: HTTP ${resp.status}`);
+  const data = await resp.json();
+  const bucket = data?.[cs.toUpperCase()] || data?.[cs] || {};
+  const keys = Object.keys(bucket).sort(); // oldest-first so the plot draws in time order
+  const out = [];
+  for (const k of keys) {
+    const f = bucket[k];
+    if (!f) continue;
+    const mod = String(f.modulation || '').toUpperCase();
+    const looksAprs = mod === 'APRS' || /qA[CORSUXZ]|TCPIP|APRS/i.test(f.path || f.raw || '');
+    if (!looksAprs) continue;
+    const lat = toNumber(f.lat);
+    const lon = toNumber(f.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) continue;
+    out.push(normalize(f));
+  }
+  return out;
+}
+
 function toNumber(v) {
   if (v === null || v === undefined || v === '') return undefined;
   const n = Number(v);
