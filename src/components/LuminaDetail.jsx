@@ -253,7 +253,13 @@ function resolveRange(value, bounds) {
   return { start: now - preset.windowMs, end: now, live: true };
 }
 
+const DEFAULT_CAMERA = { eye: { x: 1.4, y: 1.4, z: 0.9 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } };
+
 function Trajectory3D({ history }) {
+  // Plotly keeps camera state across data updates when `uirevision` stays
+  // the same between renders. Bumping it (e.g. via the Reset button) tells
+  // Plotly to re-apply the layout's camera eye instead.
+  const [cameraRev, setCameraRev] = useState(0);
   const points = useMemo(
     () => history.filter((h) =>
       typeof h.latitude === 'number' && Number.isFinite(h.latitude) &&
@@ -314,11 +320,21 @@ function Trajectory3D({ history }) {
   };
   return (
     <div className="mb-5 overflow-hidden rounded-xl border border-border/50 bg-background/40">
-      <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
           3D Trajectory · {points.length} fixes · peak {(peak.altitude_m / 1000).toFixed(2)} km
         </div>
-        <div className="text-[10px] font-mono text-muted-foreground">drag · scroll · hover</div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCameraRev((n) => n + 1)}
+            title="Reset camera to default view"
+            className="rounded-md border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-mono uppercase text-muted-foreground transition hover:border-accent hover:text-accent"
+          >
+            Reset camera
+          </button>
+          <span className="text-[10px] font-mono text-muted-foreground">drag · scroll · hover</span>
+        </div>
       </div>
       <div style={{ height: 420 }}>
         <Plot
@@ -332,8 +348,12 @@ function Trajectory3D({ history }) {
               yaxis: { ...axisStyle, title: { text: 'Latitude'  } },
               zaxis: { ...axisStyle, title: { text: 'Altitude (km)' } },
               aspectmode: 'auto',
-              camera: { eye: { x: 1.4, y: 1.4, z: 0.9 } },
+              camera: DEFAULT_CAMERA,
               bgcolor: 'rgba(0,0,0,0)',
+              // uirevision tied to cameraRev: Plotly keeps the user's camera
+              // position across data updates while this value is stable, and
+              // snaps back to DEFAULT_CAMERA when it changes (Reset click).
+              uirevision: `cam-${cameraRev}`,
             },
             hoverlabel: {
               bgcolor: 'hsl(226 47% 7%)', bordercolor: 'hsl(225 35% 20%)',
