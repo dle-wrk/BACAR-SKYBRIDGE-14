@@ -88,6 +88,36 @@ export async function fetchLatestForCallsigns(callsigns, opts = {}) {
   return out;
 }
 
+/**
+ * Fetch every SondeHub frame (oldest-first) for a single callsign within
+ * the window, filtered to those carrying real coordinates. Used by the
+ * 3D trajectory tabs in SondehubTelemetry.
+ * @param {string} callsign
+ * @param {{ durationHours?: number }} [opts]
+ * @returns {Promise<any[]>}
+ */
+export async function fetchSondehubHistory(callsign, opts = {}) {
+  const cs = String(callsign || '').trim();
+  if (!cs) return [];
+  const durationLabel = closestDurationLabel(Math.max(1, Math.min(7 * 24, opts.durationHours ?? 24)));
+  const url = `${BASE}?payload_callsign=${encodeURIComponent(cs.toUpperCase())}&duration=${durationLabel}`;
+  const resp = await fetch(url, { headers: { 'accept': 'application/json' } });
+  if (!resp.ok) throw new Error(`sondehub history ${cs}: HTTP ${resp.status}`);
+  const data = await resp.json();
+  const bucket = data?.[cs.toUpperCase()] || data?.[cs] || {};
+  const keys = Object.keys(bucket).sort(); // oldest-first
+  const out = [];
+  for (const k of keys) {
+    const f = bucket[k];
+    if (!f) continue;
+    const lat = toNumber(f.lat);
+    const lon = toNumber(f.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) continue;
+    out.push(normalize(f));
+  }
+  return out;
+}
+
 function normalize(f) {
   const uploaders = Array.isArray(f.uploaders) ? f.uploaders : [];
   return {
